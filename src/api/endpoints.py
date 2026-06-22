@@ -17,16 +17,11 @@ from src.core.model_manager import model_manager
 
 router = APIRouter()
 
-# Get custom headers from config
-custom_headers = config.get_custom_headers()
+# Global client for compatibility; each request may obtain a fresh client via config.
+openai_client = config.get_next_client()
 
-openai_client = OpenAIClient(
-    config.openai_api_key,
-    config.openai_base_url,
-    config.request_timeout,
-    api_version=config.azure_api_version,
-    custom_headers=custom_headers,
-)
+# No global OpenAI client; each request obtains a client from config to enable round‑robin provider selection.
+
 
 async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
     """Validate the client's API key from either x-api-key header or Authorization header."""
@@ -70,7 +65,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         if request.stream:
             # Streaming response - wrap in error handling
             try:
-                openai_stream = openai_client.create_chat_completion_stream(
+                client = config.get_next_client()
+                openai_stream = client.create_chat_completion_stream(
                     openai_request, request_id
                 )
                 return StreamingResponse(
@@ -79,7 +75,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                         request,
                         logger,
                         http_request,
-                        openai_client,
+                        client,
                         request_id,
                     ),
                     media_type="text/event-stream",
@@ -96,7 +92,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 import traceback
 
                 logger.error(traceback.format_exc())
-                error_message = openai_client.classify_openai_error(e.detail)
+                error_message = client.classify_openai_error(e.detail)
                 error_response = {
                     "type": "error",
                     "error": {"type": "api_error", "message": error_message},
@@ -104,7 +100,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 return JSONResponse(status_code=e.status_code, content=error_response)
         else:
             # Non-streaming response
-            openai_response = await openai_client.create_chat_completion(
+            client = config.get_next_client()
+            openai_response = await client.create_chat_completion(
                 openai_request, request_id
             )
             claude_response = convert_openai_to_claude_response(
@@ -118,7 +115,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
         logger.error(f"Unexpected error processing request: {e}")
         logger.error(traceback.format_exc())
-        error_message = openai_client.classify_openai_error(str(e))
+        client = config.get_next_client()
+        error_message = client.classify_openai_error(str(e))
         raise HTTPException(status_code=500, detail=error_message)
 
 
@@ -177,7 +175,8 @@ async def test_connection():
     """Test API connectivity to OpenAI"""
     try:
         # Simple test request to verify API connectivity
-        test_response = await openai_client.create_chat_completion(
+        client = config.get_next_client()
+        test_response = await client.create_chat_completion(
             {
                 "model": config.small_model,
                 "messages": [{"role": "user", "content": "Hello"}],

@@ -37,6 +37,7 @@ def convert_claude_to_openai(
                     text_parts.append(block.get("text", ""))
             system_text = "\n\n".join(text_parts)
 
+        # TODO: GLM routers reject 'system' role; prepend system text to first user message or create one
         if system_text.strip():
             openai_messages.append(
                 {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
