@@ -37,11 +37,20 @@ def convert_claude_to_openai(
                     text_parts.append(block.get("text", ""))
             system_text = "\n\n".join(text_parts)
 
-        # TODO: GLM routers reject 'system' role; prepend system text to first user message or create one
+        # Adjust for routers that reject 'system' role (e.g., NVIDIA NIM Qwen)
+        # If a system prompt exists, prepend it to the first user message. If no user message is present, create a user message containing the system text.
         if system_text.strip():
-            openai_messages.append(
-                {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
-            )
+            # Find the index of the first user message in openai_messages (if any added already)
+            inserted = False
+            for idx, m in enumerate(openai_messages):
+                if m.get("role") == Constants.ROLE_USER:
+                    # Prepend system text with a newline separator
+                    m["content"] = system_text.strip() + "\n\n" + m.get("content", "")
+                    inserted = True
+                    break
+            if not inserted:
+                # No user message yet – add a user message with the system text
+                openai_messages.append({"role": Constants.ROLE_USER, "content": system_text.strip()})
 
     # Process Claude messages
     i = 0
