@@ -38,6 +38,7 @@ class Config:
 
         # Usage tracking for RPM limits
         self._provider_usage = {p["api_key"]: {"count": 0, "window_start": time.time()} for p in self.providers}
+        self._provider_penalties = {}  # api_key -> penalty_end_time
         self._rpm_limit = 40  # Default RPM limit per key
 
         # Connection settings
@@ -88,10 +89,16 @@ class Config:
         
         return custom_headers
 
+    def report_rate_limit(self, api_key: str):
+        """Mark a provider as rate-limited and set a cooldown penalty."""
+        penalty_duration = 60  # 60 seconds cooldown
+        self._provider_penalties[api_key] = time.time() + penalty_duration
+        print(f"⚠️ Provider {api_key[:8]}... reported rate limit. Penalizing for {penalty_duration}s.")
+
     def get_next_provider(self):
         """Return the next provider configuration respecting RPM limits.
         Each provider can be used up to 40 times per minute. If a provider has
-        exhausted its quota, the method skips it and checks the next one. If all
+        exhausted its quota or is under penalty, the method skips it and checks the next one. If all
         providers are exhausted, it raises a RuntimeError indicating the need
         to wait before making more requests.
         """
@@ -104,13 +111,22 @@ class Config:
         # Attempt to find a provider with remaining quota
         for _ in range(len(self.providers)):
             provider = next(self._provider_cycle)
-            usage = self._provider_usage[provider["api_key"]]
+            api_key = provider["api_key"]
+            usage = self._provider_usage[api_key]
+
+            # Skip if under penalty
+            if api_key in self._provider_penalties:
+                if now < self._provider_penalties[api_key]:
+                    continue
+                else:
+                    del self._provider_penalties[api_key]
+
             if usage["count"] < self._rpm_limit:
                 # Increment usage for this selection
                 usage["count"] += 1
                 return provider
         # All providers exhausted
-        raise RuntimeError("All API keys have reached their RPM limit. Wait before retrying.")
+        raise RuntimeError("All API keys have reached their RPM limit or are under penalty. Wait before retrying.")
 
     def get_next_client(self):
         """Create an OpenAIClient for the next provider.

@@ -86,7 +86,9 @@ class OpenAIClient:
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
+            config.report_rate_limit(self.api_key)
             raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
+
         except BadRequestError as e:
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
@@ -135,7 +137,9 @@ class OpenAIClient:
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
+            config.report_rate_limit(self.api_key)
             raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
+
         except BadRequestError as e:
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
