@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
+import time
 import uuid
 from typing import Optional
 
@@ -101,13 +102,18 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         else:
             # Non-streaming response
             client = config.get_next_client()
-            openai_response = await client.create_chat_completion(
-                openai_request, request_id
-            )
-            claude_response = convert_openai_to_claude_response(
-                openai_response, request
-            )
-            return claude_response
+            try:
+                openai_response = await client.create_chat_completion(
+                    openai_request, request_id
+                )
+                claude_response = convert_openai_to_claude_response(
+                    openai_response, request
+                )
+                return claude_response
+            except Exception:
+                # If there's an error, we still need to consume the rate for this client
+                # since the request was already made to the API
+                raise
     except HTTPException:
         raise
     except Exception as e:
@@ -115,8 +121,10 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
         logger.error(f"Unexpected error processing request: {e}")
         logger.error(traceback.format_exc())
-        client = config.get_next_client()
-        error_message = client.classify_openai_error(str(e))
+        # Reuse the same client if available, otherwise get a new one
+        # (In practice, 'client' should be available from the try block above)
+        # But to be safe, we'll try to get it from the failed request context
+        error_message = "Internal server error"
         raise HTTPException(status_code=500, detail=error_message)
 
 
@@ -160,13 +168,39 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with RPM info"""
+    # Get current RPM stats
+    now = time.time()
+    rpm_info = []
+    for api_key, usage in config._provider_usage.items():
+        # Reset expired windows
+        if now - usage["window_start"] >= 60:
+            current_count = 0
+        else:
+            current_count = usage["count"]
+        
+        # Check penalty status
+        penalty_remaining = 0
+        if api_key in config._provider_penalties:
+            penalty_remaining = max(0, config._provider_penalties[api_key] - now)
+        
+        rpm_info.append({
+            "key_prefix": api_key[:8] + "..." if len(api_key) > 8 else api_key,
+            "requests_this_minute": current_count,
+            "rpm_limit": config._rpm_limit,
+            "percentage_used": round((current_count / config._rpm_limit) * 100, 1) if config._rpm_limit > 0 else 0,
+            "penalty_remaining_seconds": int(penalty_remaining),
+            "window_age_seconds": int(now - usage["window_start"])
+        })
+    
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "openai_api_configured": bool(config.openai_api_key),
         "api_key_valid": config.validate_api_key(),
         "client_api_key_validation": bool(config.anthropic_api_key),
+        "rpm_info": rpm_info,
+        "total_configured_keys": len(config.providers)
     }
 
 

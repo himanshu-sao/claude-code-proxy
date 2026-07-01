@@ -2,7 +2,6 @@ import os
 import time
 import sys
 import itertools
-from src.core.client import OpenAIClient
 
 # Configuration
 class Config:
@@ -134,6 +133,9 @@ class Config:
         If all API keys have reached their RPM limit, the method waits until the
         next minute window opens and logs a message.
         """
+        # Lazy import to avoid circular dependency
+        from src.core.client import OpenAIClient
+        
         try:
             prov = self.get_next_provider()
         except RuntimeError as e:
