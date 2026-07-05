@@ -63,12 +63,22 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         if await http_request.is_disconnected():
             raise HTTPException(status_code=499, detail="Client disconnected")
 
+        # Get the model and tier from the model manager
+        openai_model, model_tier = model_manager.map_claude_model_to_openai(
+            request.model
+        )
+        # Update the OpenAI request with the resolved model
+        openai_request["model"] = openai_model
+
         if request.stream:
             # Streaming response - wrap in error handling
             try:
-                client = config.get_next_client()
+                client = await config.get_next_client_async()
+                if client is None:
+                    # All API keys exhausted - return 429
+                    raise HTTPException(status_code=429, detail="All API keys exhausted. Please wait before trying again.")
                 openai_stream = client.create_chat_completion_stream(
-                    openai_request, request_id
+                    openai_request, request_id, model_tier
                 )
                 return StreamingResponse(
                     convert_openai_streaming_to_claude_with_cancellation(
@@ -87,32 +97,28 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                         "Access-Control-Allow-Headers": "*",
                     },
                 )
-            except HTTPException as e:
-                # Convert to proper error response for streaming
-                logger.error(f"Streaming error: {e.detail}")
+            except Exception as e:
+                # Log unexpected errors (API errors are now yielded as events in the stream)
+                logger.error(f"Unexpected streaming error: {e}")
                 import traceback
-
                 logger.error(traceback.format_exc())
-                error_message = client.classify_openai_error(e.detail)
-                error_response = {
-                    "type": "error",
-                    "error": {"type": "api_error", "message": error_message},
-                }
-                return JSONResponse(status_code=e.status_code, content=error_response)
         else:
             # Non-streaming response
             client = config.get_next_client()
             try:
                 openai_response = await client.create_chat_completion(
-                    openai_request, request_id
+                    openai_request, request_id, model_tier
                 )
                 claude_response = convert_openai_to_claude_response(
                     openai_response, request
                 )
                 return claude_response
-            except Exception:
-                # If there's an error, we still need to consume the rate for this client
-                # since the request was already made to the API
+            except HTTPException as e:
+                # Re-raise HTTP exceptions as-is (client already reported the error)
+                raise
+            except Exception as e:
+                # Log the error and re-raise (client already reported the error)
+                logger.error(f"Non-streaming request failed: {e}")
                 raise
     except HTTPException:
         raise

@@ -13,7 +13,12 @@ class OpenAIClient:
     def __init__(self, api_key: str, base_url: str, timeout: int = 90, api_version: Optional[str] = None, custom_headers: Optional[Dict[str, str]] = None):
         self.api_key = api_key
         self.base_url = base_url
+        self.timeout = timeout
+        self.api_version = api_version
         self.custom_headers = custom_headers or {}
+        self._last_model: Optional[str] = None
+        self._last_model_tier: Optional[str] = None
+        self.active_requests: Dict[str, asyncio.Event] = {}
         
         # Prepare default headers
         default_headers = {
@@ -40,16 +45,21 @@ class OpenAIClient:
                 timeout=timeout,
                 default_headers=all_headers
             )
-        self.active_requests: Dict[str, asyncio.Event] = {}
+
+    def _track_model(self, request: Dict[str, Any], tier: Optional[str] = None):
+        """Record the model being used for this request."""
+        self._last_model = request.get("model")
+        self._last_model_tier = tier
     
-    async def create_chat_completion(self, request: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
+    async def create_chat_completion(self, request: Dict[str, Any], request_id: Optional[str] = None, model_tier: Optional[str] = None) -> Dict[str, Any]:
         """Send chat completion to OpenAI API with cancellation support."""
-        
+        self._track_model(request, model_tier)
+
         # Create cancellation token if request_id provided
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
-        
+
         try:
             # Create task that can be cancelled
             completion_task = asyncio.create_task(
@@ -82,20 +92,30 @@ class OpenAIClient:
                 completion = await completion_task
             
             # Convert to dict format that matches the original interface
-            return completion.model_dump()
+            result = completion.model_dump()
+            
+            # Report successful model usage
+            self.report_model_success()
+            
+            return result
         
         except AuthenticationError as e:
+            self._report_model_error(401, str(e))
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
+            self._report_model_error(429, str(e))
             config.report_rate_limit(self.api_key)
             raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
 
         except BadRequestError as e:
+            self._report_model_error(400, str(e))
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
             status_code = getattr(e, 'status_code', 500)
+            self._report_model_error(status_code, str(e))
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
         except Exception as e:
+            self._report_model_error(500, str(e))
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
         
         finally:
@@ -103,14 +123,15 @@ class OpenAIClient:
             if request_id and request_id in self.active_requests:
                 del self.active_requests[request_id]
     
-    async def create_chat_completion_stream(self, request: Dict[str, Any], request_id: Optional[str] = None) -> AsyncGenerator[str, None]:
+    async def create_chat_completion_stream(self, request: Dict[str, Any], request_id: Optional[str] = None, model_tier: Optional[str] = None) -> AsyncGenerator[str, None]:
         """Send streaming chat completion to OpenAI API with cancellation support."""
-        
+        self._track_model(request, model_tier)
+
         # Create cancellation token if request_id provided
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
-        
+
         try:
             # Ensure stream is enabled
             request["stream"] = True
@@ -125,7 +146,10 @@ class OpenAIClient:
                 # Check for cancellation before yielding each chunk
                 if request_id and request_id in self.active_requests:
                     if self.active_requests[request_id].is_set():
-                        raise HTTPException(status_code=499, detail="Request cancelled by client")
+                        # Send cancellation event instead of raising exception
+                        yield f"data: {{\"error\": {{\"message\": \"Request cancelled by client\", \"type\": \"cancelled\"}}}}"
+                        self._report_model_error(499, "Request cancelled")
+                        return
                 
                 # Convert chunk to SSE format matching original HTTP client format
                 chunk_dict = chunk.model_dump()
@@ -134,20 +158,32 @@ class OpenAIClient:
             
             # Signal end of stream
             yield "data: [DONE]"
+            
+            # Report successful model usage (only if we got here without errors)
+            self.report_model_success()
                 
         except AuthenticationError as e:
-            raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
+            self._report_model_error(401, str(e))
+            error_msg = self.classify_openai_error(str(e))
+            yield f"data: {{\"error\": {{\"message\": \"{error_msg}\", \"type\": \"authentication_error\"}}}}"
         except RateLimitError as e:
+            self._report_model_error(429, str(e))
             config.report_rate_limit(self.api_key)
-            raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
+            error_msg = self.classify_openai_error(str(e))
+            yield f"data: {{\"error\": {{\"message\": \"{error_msg}\", \"type\": \"rate_limit_error\"}}}}"
 
         except BadRequestError as e:
-            raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
+            self._report_model_error(400, str(e))
+            error_msg = self.classify_openai_error(str(e))
+            yield f"data: {{\"error\": {{\"message\": \"{error_msg}\", \"type\": \"bad_request_error\"}}}}"
         except APIError as e:
             status_code = getattr(e, 'status_code', 500)
-            raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
+            self._report_model_error(status_code, str(e))
+            error_msg = self.classify_openai_error(str(e))
+            yield f"data: {{\"error\": {{\"message\": \"{error_msg}\", \"type\": \"api_error\"}}}}"
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+            self._report_model_error(500, str(e))
+            yield f"data: {{\"error\": {{\"message\": \"Unexpected error: {str(e)}\", \"type\": \"internal_error\"}}}}"
         
         finally:
             # Clean up active request tracking
@@ -181,6 +217,31 @@ class OpenAIClient:
         # Default: return original message
         return str(error_detail)
     
+    def _report_model_error(self, status_code: int, error_detail: str):
+        """Report model errors to config for fallback tracking."""
+        if not self._last_model or not self._last_model_tier:
+            return
+        if self._last_model_tier == "unknown":
+            return
+            
+        error_str = str(error_detail).lower()
+        is_model_error = (
+            status_code == 429 or
+            status_code == 503 or
+            "rate_limit" in error_str or
+            "model" in error_str and ("not found" in error_str or "does not exist" in error_str or "unavailable" in error_str) or
+            "overloaded" in error_str or
+            "capacity" in error_str
+        )
+            
+        if is_model_error:
+            config.report_model_failure(self._last_model, self._last_model_tier)
+            
+    def report_model_success(self):
+        """Report a successful model request."""
+        if self._last_model and self._last_model_tier and self._last_model_tier != "unknown":
+            config.report_model_success(self._last_model, self._last_model_tier)
+            
     def cancel_request(self, request_id: str) -> bool:
         """Cancel an active request by request_id."""
         if request_id in self.active_requests:

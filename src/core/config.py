@@ -2,6 +2,8 @@ import os
 import time
 import sys
 import itertools
+import asyncio
+import threading
 
 # Configuration
 class Config:
@@ -38,16 +40,61 @@ class Config:
         # Usage tracking for RPM limits
         self._provider_usage = {p["api_key"]: {"count": 0, "window_start": time.time()} for p in self.providers}
         self._provider_penalties = {}  # api_key -> penalty_end_time
-        self._rpm_limit = 40  # Default RPM limit per key
+        self._rpm_limit = int(os.environ.get("RPM_LIMIT", "40"))  # RPM limit per key
 
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
         
-        # Model settings - BIG and SMALL models
-        self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
-        self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)
-        self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
+        # --- Multi-model support with fallback (comma-separated) ---
+        # Each tier can have a list of models separated by commas.
+        # The first model is the primary; subsequent ones are fallbacks.
+        # When the primary model encounters errors (429, 503, model not found),
+        # the proxy automatically switches to the next fallback.
+        # A background health checker periodically tests the primary and
+        # switches back when it's healthy again.
+        raw_big = os.environ.get("BIG_MODEL", "gpt-4o")
+        raw_middle = os.environ.get("MIDDLE_MODEL", raw_big)
+        raw_small = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
+        
+        self.big_models = [m.strip() for m in raw_big.split(",") if m.strip()]
+        self.middle_models = [m.strip() for m in raw_middle.split(",") if m.strip()]
+        self.small_models = [m.strip() for m in raw_small.split(",") if m.strip()]
+        
+        # Active model index for each tier (0 = primary, 1+ = fallback)
+        self._active_big_idx = 0
+        self._active_middle_idx = 0
+        self._active_small_idx = 0
+        
+        # Model health tracking: model_name -> {"failed_at": timestamp, "consecutive_failures": count}
+        self._model_failures: dict = {}
+        self._model_failure_threshold = int(os.environ.get("MODEL_FAILURE_THRESHOLD", "3"))
+        self._model_health_check_interval = int(os.environ.get("MODEL_HEALTH_CHECK_INTERVAL", "60"))
+
+        # --- Probe-based primary restoration ---
+        # Restoring the primary model from a fallback is gated on a real probe
+        # request succeeding against the primary. This eliminates the flip-flop /
+        # thrashing behavior that occurred when the primary was still unhealthy
+        # but the loop restored it blindly after a fixed interval.
+        self._probe_timeout = int(os.environ.get("MODEL_PROBE_TIMEOUT", "10"))
+        self._probe_max_tokens = int(os.environ.get("MODEL_PROBE_MAX_TOKENS", "1"))
+        # After a failed restore attempt, wait this many health-check intervals
+        # before retrying. Doubles on each consecutive failure, capped at this value.
+        self._restore_backoff_max_intervals = int(os.environ.get("MODEL_RESTORE_BACKOFF_MAX", "8"))
+        # Track consecutive probe failures per tier so we can back off gracefully
+        # for tiers whose primary remains unhealthy.
+        self._restore_probe_failures: dict = {}
+        
+        # Easy accessors for single-model compatibility (updated dynamically)
+        self.big_model = self.big_models[0]
+        self.middle_model = self.middle_models[0]
+        self.small_model = self.small_models[0]
+        
+        # Lock for thread-safe model index updates
+        self._model_lock = threading.Lock()
+        
+        # Background health checker task (started after event loop is running)
+        self._health_check_task = None
         
     def validate_api_key(self):
         """Basic API key validation"""
@@ -127,30 +174,48 @@ class Config:
         # All providers exhausted
         raise RuntimeError("All API keys have reached their RPM limit or are under penalty. Wait before retrying.")
 
-    def get_next_client(self):
-        """Create an OpenAIClient for the next provider.
-        This is used per request so that each request can use a different API key.
-        If all API keys have reached their RPM limit, the method waits until the
-        next minute window opens and logs a message.
+    async def get_next_client_async(self):
+        """Create an OpenAIClient for the next provider (async, non-blocking).
+        If all API keys have reached their RPM limit, returns None so the caller
+        can handle backpressure gracefully (e.g., return 429/503 to the client).
         """
         # Lazy import to avoid circular dependency
         from src.core.client import OpenAIClient
         
         try:
             prov = self.get_next_provider()
-        except RuntimeError as e:
-            # All keys exhausted – calculate wait time until the next minute window
+        except RuntimeError:
+            return None  # Signal backpressure instead of blocking
+        
+        custom_headers = self.get_custom_headers()
+        return OpenAIClient(
+            api_key=prov["api_key"],
+            base_url=prov["base_url"],
+            timeout=self.request_timeout,
+            api_version=self.azure_api_version,
+            custom_headers=custom_headers,
+        )
+
+    def get_next_client(self):
+        """Synchronous wrapper: obtain a client, with brief blocking if keys exhausted.
+        For async endpoints, prefer get_next_client_async().
+        """
+        # Lazy import to avoid circular dependency
+        from src.core.client import OpenAIClient
+        
+        try:
+            prov = self.get_next_provider()
+        except RuntimeError:
+            # All keys exhausted – calculate shortest wait and sleep briefly
             now = time.time()
-            # Find the smallest time remaining until a window resets
             wait_times = []
             for usage in self._provider_usage.values():
                 elapsed = now - usage["window_start"]
                 remaining = max(0, 60 - elapsed)
                 wait_times.append(remaining)
             wait = min(wait_times) if wait_times else 60
-            print(f"⚠️ All API keys exhausted. Waiting {int(wait)} seconds before retrying.")
-            time.sleep(wait)
-            # After waiting, retry once
+            print(f"⚠️ All API keys exhausted. Waiting {int(min(wait, 2.0))}s (of {int(wait)}s needed) before retrying.")
+            time.sleep(min(wait, 2.0))  # Cap at 2s to avoid hanging
             prov = self.get_next_provider()
         custom_headers = self.get_custom_headers()
         return OpenAIClient(
@@ -161,9 +226,215 @@ class Config:
             custom_headers=custom_headers,
         )
 
+    # --- Model fallback / hot-swap ---
+
+    def _get_model_list(self, tier: str) -> tuple:
+        """Get the model list and index attr name for a tier."""
+        if tier == "big":
+            return self.big_models, "_active_big_idx"
+        elif tier == "middle":
+            return self.middle_models, "_active_middle_idx"
+        else:
+            return self.small_models, "_active_small_idx"
+
+    def get_active_model(self, tier: str) -> str:
+        """Get the currently active model for a tier."""
+        models, idx_attr = self._get_model_list(tier)
+        idx = getattr(self, idx_attr)
+        return models[idx] if idx < len(models) else models[0]
+
+    def report_model_failure(self, model_name: str, tier: str):
+        """Report a model failure. If threshold reached, switch to next fallback."""
+        now = time.time()
+        with self._model_lock:
+            models, idx_attr = self._get_model_list(tier)
+            current_idx = getattr(self, idx_attr)
+            
+            if current_idx >= len(models):
+                return  # No more fallbacks available
+            
+            current_model = models[current_idx]
+            if current_model != model_name:
+                return  # Stale report for a non-active model
+            
+            entry = self._model_failures.get(model_name, {"failed_at": now, "consecutive_failures": 0})
+            entry["consecutive_failures"] += 1
+            entry["failed_at"] = now
+            self._model_failures[model_name] = entry
+            
+            if entry["consecutive_failures"] >= self._model_failure_threshold:
+                next_idx = current_idx + 1
+                if next_idx < len(models):
+                    setattr(self, idx_attr, next_idx)
+                    new_model = models[next_idx]
+                    print(f"🔄 Model fallback: {tier} tier switched from '{model_name}' to '{new_model}' "
+                          f"(after {entry['consecutive_failures']} failures)")
+                    # Update easy accessor
+                    if tier == "big":
+                        self.big_model = new_model
+                    elif tier == "middle":
+                        self.middle_model = new_model
+                    else:
+                        self.small_model = new_model
+                else:
+                    print(f"⚠️ All {tier} tier models exhausted. No fallback available.")
+
+    def report_model_success(self, model_name: str, tier: str):
+        """Report a successful model call, resetting failure counters."""
+        with self._model_lock:
+            if model_name in self._model_failures:
+                del self._model_failures[model_name]
+
+    def check_and_restore_primary(self):
+        """If any tier is on a fallback, attempt to restore its primary model.
+        Called periodically by the background health checker.
+        """
+        for tier in ["big", "middle", "small"]:
+            models, idx_attr = self._get_model_list(tier)
+            current_idx = getattr(self, idx_attr)
+            
+            if current_idx > 0 and current_idx < len(models):
+                primary = models[0]
+                failure_entry = self._model_failures.get(primary)
+                if failure_entry:
+                    elapsed = time.time() - failure_entry["failed_at"]
+                    if elapsed > self._model_health_check_interval:
+                        print(f"🔄 Attempting to restore primary {tier} model: '{primary}' "
+                              f"(was down for {int(elapsed)}s)")
+                        with self._model_lock:
+                            setattr(self, idx_attr, 0)
+                            if tier == "big":
+                                self.big_model = primary
+                            elif tier == "middle":
+                                self.middle_model = primary
+                            else:
+                                self.small_model = primary
+                            # Reset failure entry so one success keeps it active
+                            self._model_failures[primary] = {
+                                "failed_at": 0,
+                                "consecutive_failures": 0,
+                            }
+
+    async def _probe_model(self, model_name: str) -> bool:
+        """Issue a tiny completion to verify whether a model is healthy.
+        Returns True on success, False on any error / timeout. Uses the next
+        available provider key (separate from RPM accounting of caller) so a
+        probe cannot starve real traffic beyond a single bounded call.
+        """
+        # Lazy import to avoid circular dependency
+        from src.core.client import OpenAIClient
+
+        try:
+            client = self.get_next_client()
+        except RuntimeError:
+            # No provider available right now; treat as probe failure.
+            return False
+
+        probe_request = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": self._probe_max_tokens,
+        }
+
+        try:
+            await asyncio.wait_for(
+                client.create_chat_completion(probe_request, model_tier="unknown"),
+                timeout=self._probe_timeout,
+            )
+            return True
+        except asyncio.TimeoutError:
+            print(f"🔍 Probe timeout for '{model_name}' ({self._probe_timeout}s)")
+            return False
+        except Exception as e:
+            print(f"🔍 Probe failed for '{model_name}': {str(e)[:120]}")
+            return False
+
+    async def check_and_restore_primary_async(self):
+        """Probe each tier's primary model before flipping back from a fallback.
+        Only restores when the probe succeeds. On probe failure, backs off
+        subsequent restore attempts (exponential, capped).
+        """
+        for tier in ["big", "middle", "small"]:
+            models, idx_attr = self._get_model_list(tier)
+            # Read current index without holding the lock during the (slow) probe
+            current_idx = getattr(self, idx_attr)
+            if not (current_idx > 0 and current_idx < len(models)):
+                # On primary (or exhausted) -> clear any stale backoff state
+                self._restore_probe_failures.pop(tier, None)
+                continue
+
+            primary = models[0]
+            # Determine whether we should attempt a probe now, given backoff
+            consecutive_failures = self._restore_probe_failures.get(tier, 0)
+            backoff_intervals = min(2 ** consecutive_failures, self._restore_backoff_max_intervals)
+            failure_entry = self._model_failures.get(primary)
+            if failure_entry:
+                elapsed = time.time() - failure_entry["failed_at"]
+                if elapsed < self._model_health_check_interval * backoff_intervals:
+                    continue  # Too soon to retry
+            # If we are on a fallback but have no failure_entry (shouldn't happen
+            # normally), probe immediately.
+
+            healthy = await self._probe_model(primary)
+            if healthy:
+                print(f"🔄 Probe succeeded: restoring primary {tier} model '{primary}' "
+                      f"after {consecutive_failures} probe failure(s)")
+                with self._model_lock:
+                    # Re-check the index under the lock; another caller may have
+                    # mutated it concurrently. Only flip if still on a fallback.
+                    now_idx = getattr(self, idx_attr)
+                    if now_idx > 0 and now_idx < len(models):
+                        setattr(self, idx_attr, 0)
+                        if tier == "big":
+                            self.big_model = primary
+                        elif tier == "middle":
+                            self.middle_model = primary
+                        else:
+                            self.small_model = primary
+                        # Clear failure tracking so one real failure re-penalizes
+                        # from scratch.
+                        self._model_failures.pop(primary, None)
+                # Reset backoff for this tier
+                self._restore_probe_failures.pop(tier, None)
+            else:
+                # Probe failed -> increment backoff counter, refresh failed_at
+                # so the next attempt waits another full backoff window.
+                self._restore_probe_failures[tier] = consecutive_failures + 1
+                print(f"🔍 Probe '{primary}' still unhealthy ({tier} tier); "
+                      f"backing off for {min(2 ** self._restore_probe_failures[tier], self._restore_backoff_max_intervals)} "
+                      f"intervals")
+                with self._model_lock:
+                    self._model_failures[primary] = {
+                        "failed_at": time.time(),
+                        "consecutive_failures": failure_entry.get("consecutive_failures", 0) if failure_entry else self._model_failure_threshold,
+                    }
+
+    async def _run_health_check_loop(self):
+        """Background task: periodically attempt to probe-restore primary models."""
+        while True:
+            await asyncio.sleep(self._model_health_check_interval)
+            try:
+                await self.check_and_restore_primary_async()
+            except Exception as e:
+                print(f"⚠️ Health check error: {e}")
+
+    def start_health_checker(self):
+        """Start the background model health checker (must be called with a running event loop)."""
+        if self._health_check_task is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._health_check_task = loop.create_task(self._run_health_check_loop())
+                print("🏥 Model health checker started (interval: {}s).".format(
+                    self._model_health_check_interval))
+            except RuntimeError:
+                print("⚠️ Cannot start health checker: no running event loop.")
+
 try:
     config = Config()
-    print(f" Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
+    print(f" Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
+    print(f"   Big models: {config.big_models}")
+    print(f"   Middle models: {config.middle_models}")
+    print(f"   Small models: {config.small_models}")
 except Exception as e:
     print(f"=4 Configuration Error: {e}")
     sys.exit(1)
