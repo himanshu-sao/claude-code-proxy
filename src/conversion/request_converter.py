@@ -93,8 +93,24 @@ def convert_claude_to_openai(
         "temperature": claude_request.temperature,
         "stream": claude_request.stream,
     }
+    # Log only non-sensitive routing metadata; never log message content
+    # (system/user text or base64 image payloads) at any level.
+    _msg_count = len(openai_messages)
+    _content_len = sum(
+        len(m.get("content") if isinstance(m.get("content"), str) else "")
+        + sum(
+            len(p.get("text", "")) for p in m["content"]
+            if isinstance(m.get("content"), list)
+            and isinstance(p, dict)
+            and p.get("type") in ("text", "input_text")
+        )
+        for m in openai_messages
+    )
     logger.debug(
-        f"Converted Claude request to OpenAI format: {json.dumps(openai_request, indent=2, ensure_ascii=False)}"
+        "Converted Claude -> OpenAI: model=%s, messages=%d, content_chars=%d, "
+        "max_tokens=%d, stream=%s",
+        openai_model, _msg_count, _content_len,
+        openai_request["max_tokens"], openai_request["stream"],
     )
     # Add optional parameters
     if claude_request.stop_sequences:
