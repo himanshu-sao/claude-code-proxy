@@ -3,7 +3,10 @@ import time
 import sys
 import itertools
 import asyncio
+import logging
 import threading
+
+_log = logging.getLogger("config")
 
 # Configuration
 class Config:
@@ -15,7 +18,7 @@ class Config:
         # Add Anthropic API key for client validation
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not self.anthropic_api_key:
-            print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
+            _log.warning("ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
         
         self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
@@ -139,7 +142,8 @@ class Config:
         """Mark a provider as rate-limited and set a cooldown penalty."""
         penalty_duration = 60  # 60 seconds cooldown
         self._provider_penalties[api_key] = time.time() + penalty_duration
-        print(f"⚠️ Provider {api_key[:8]}... reported rate limit. Penalizing for {penalty_duration}s.")
+        _log.warning("Provider %s... reported rate limit. Penalizing for %ds.",
+                     api_key[:8], penalty_duration)
 
     def get_next_provider(self):
         """Return the next provider configuration respecting RPM limits.
@@ -214,7 +218,8 @@ class Config:
                 remaining = max(0, 60 - elapsed)
                 wait_times.append(remaining)
             wait = min(wait_times) if wait_times else 60
-            print(f"⚠️ All API keys exhausted. Waiting {int(min(wait, 2.0))}s (of {int(wait)}s needed) before retrying.")
+            _log.warning("All API keys exhausted. Waiting %ds (of %ds needed) before retrying.",
+                         int(min(wait, 2.0)), int(wait))
             time.sleep(min(wait, 2.0))  # Cap at 2s to avoid hanging
             prov = self.get_next_provider()
         custom_headers = self.get_custom_headers()
@@ -267,8 +272,7 @@ class Config:
                 if next_idx < len(models):
                     setattr(self, idx_attr, next_idx)
                     new_model = models[next_idx]
-                    print(f"🔄 Model fallback: {tier} tier switched from '{model_name}' to '{new_model}' "
-                          f"(after {entry['consecutive_failures']} failures)")
+                    old_model = model_name
                     # Update easy accessor
                     if tier == "big":
                         self.big_model = new_model
@@ -276,44 +280,20 @@ class Config:
                         self.middle_model = new_model
                     else:
                         self.small_model = new_model
+                    _log.warning(
+                        "🔄 MODEL SWITCH [%s] %s → %s (after %d failures)",
+                        tier.upper(), old_model, new_model, entry["consecutive_failures"]
+                    )
+                    from src.core.logging import log_active_models
+                    log_active_models(_log)
                 else:
-                    print(f"⚠️ All {tier} tier models exhausted. No fallback available.")
+                    _log.warning("All %s tier models exhausted. No fallback available.", tier)
 
     def report_model_success(self, model_name: str, tier: str):
         """Report a successful model call, resetting failure counters."""
         with self._model_lock:
             if model_name in self._model_failures:
                 del self._model_failures[model_name]
-
-    def check_and_restore_primary(self):
-        """If any tier is on a fallback, attempt to restore its primary model.
-        Called periodically by the background health checker.
-        """
-        for tier in ["big", "middle", "small"]:
-            models, idx_attr = self._get_model_list(tier)
-            current_idx = getattr(self, idx_attr)
-            
-            if current_idx > 0 and current_idx < len(models):
-                primary = models[0]
-                failure_entry = self._model_failures.get(primary)
-                if failure_entry:
-                    elapsed = time.time() - failure_entry["failed_at"]
-                    if elapsed > self._model_health_check_interval:
-                        print(f"🔄 Attempting to restore primary {tier} model: '{primary}' "
-                              f"(was down for {int(elapsed)}s)")
-                        with self._model_lock:
-                            setattr(self, idx_attr, 0)
-                            if tier == "big":
-                                self.big_model = primary
-                            elif tier == "middle":
-                                self.middle_model = primary
-                            else:
-                                self.small_model = primary
-                            # Reset failure entry so one success keeps it active
-                            self._model_failures[primary] = {
-                                "failed_at": 0,
-                                "consecutive_failures": 0,
-                            }
 
     async def _probe_model(self, model_name: str) -> bool:
         """Issue a tiny completion to verify whether a model is healthy.
@@ -343,10 +323,10 @@ class Config:
             )
             return True
         except asyncio.TimeoutError:
-            print(f"🔍 Probe timeout for '{model_name}' ({self._probe_timeout}s)")
+            _log.debug("Probe timeout for '%s' (%ds)", model_name, self._probe_timeout)
             return False
         except Exception as e:
-            print(f"🔍 Probe failed for '{model_name}': {str(e)[:120]}")
+            _log.debug("Probe failed for '%s': %s", model_name, str(e)[:120])
             return False
 
     async def check_and_restore_primary_async(self):
@@ -377,8 +357,8 @@ class Config:
 
             healthy = await self._probe_model(primary)
             if healthy:
-                print(f"🔄 Probe succeeded: restoring primary {tier} model '{primary}' "
-                      f"after {consecutive_failures} probe failure(s)")
+                _log.info("Probe succeeded: restoring primary %s model '%s' after %d probe failure(s)",
+                          tier, primary, consecutive_failures)
                 with self._model_lock:
                     # Re-check the index under the lock; another caller may have
                     # mutated it concurrently. Only flip if still on a fallback.
@@ -400,9 +380,8 @@ class Config:
                 # Probe failed -> increment backoff counter, refresh failed_at
                 # so the next attempt waits another full backoff window.
                 self._restore_probe_failures[tier] = consecutive_failures + 1
-                print(f"🔍 Probe '{primary}' still unhealthy ({tier} tier); "
-                      f"backing off for {min(2 ** self._restore_probe_failures[tier], self._restore_backoff_max_intervals)} "
-                      f"intervals")
+                _log.info("Probe '%s' still unhealthy (%s tier); backing off for %d intervals",
+                          primary, tier, min(2 ** self._restore_probe_failures[tier], self._restore_backoff_max_intervals))
                 with self._model_lock:
                     self._model_failures[primary] = {
                         "failed_at": time.time(),
@@ -416,7 +395,7 @@ class Config:
             try:
                 await self.check_and_restore_primary_async()
             except Exception as e:
-                print(f"⚠️ Health check error: {e}")
+                _log.error("Health check error: %s", e)
 
     def start_health_checker(self):
         """Start the background model health checker (must be called with a running event loop)."""
@@ -424,17 +403,20 @@ class Config:
             try:
                 loop = asyncio.get_running_loop()
                 self._health_check_task = loop.create_task(self._run_health_check_loop())
-                print("🏥 Model health checker started (interval: {}s).".format(
-                    self._model_health_check_interval))
+                _log.info("Model health checker started (interval: %ds).", self._model_health_check_interval)
+                # Log initial active models
+                from src.core.logging import log_active_models
+                log_active_models(_log)
             except RuntimeError:
-                print("⚠️ Cannot start health checker: no running event loop.")
+                _log.warning("Cannot start health checker: no running event loop.")
 
 try:
     config = Config()
-    print(f" Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
-    print(f"   Big models: {config.big_models}")
-    print(f"   Middle models: {config.middle_models}")
-    print(f"   Small models: {config.small_models}")
+    _log.info("Configuration loaded: API_KEY=%s, BASE_URL='%s'",
+              '*' * 20, config.openai_base_url)
+    _log.info("Big models: %s", config.big_models)
+    _log.info("Middle models: %s", config.middle_models)
+    _log.info("Small models: %s", config.small_models)
 except Exception as e:
-    print(f"=4 Configuration Error: {e}")
+    _log.critical("Configuration Error: %s", e)
     sys.exit(1)

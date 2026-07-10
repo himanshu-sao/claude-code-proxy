@@ -1,11 +1,14 @@
 import asyncio
 import json
+import logging
 from fastapi import HTTPException
 from typing import Optional, AsyncGenerator, Dict, Any
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai._exceptions import APIError, RateLimitError, AuthenticationError, BadRequestError
 from src.core.config import config
+
+_log = logging.getLogger("client")
 
 class OpenAIClient:
     """Async OpenAI client with cancellation support."""
@@ -223,7 +226,7 @@ class OpenAIClient:
             return
         if self._last_model_tier == "unknown":
             return
-            
+
         error_str = str(error_detail).lower()
         is_model_error = (
             status_code == 429 or
@@ -233,13 +236,19 @@ class OpenAIClient:
             "overloaded" in error_str or
             "capacity" in error_str
         )
-            
+
+        # Log the error
+        _log.warning("Model error [%s] %s: %s (status=%d, model_error=%s)",
+                     self._last_model_tier.upper(), self._last_model,
+                     str(error_detail)[:100], status_code, is_model_error)
+
         if is_model_error:
             config.report_model_failure(self._last_model, self._last_model_tier)
             
     def report_model_success(self):
         """Report a successful model request."""
         if self._last_model and self._last_model_tier and self._last_model_tier != "unknown":
+            _log.debug("Model success [%s] %s", self._last_model_tier.upper(), self._last_model)
             config.report_model_success(self._last_model, self._last_model_tier)
             
     def cancel_request(self, request_id: str) -> bool:

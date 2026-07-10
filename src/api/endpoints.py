@@ -49,12 +49,15 @@ async def validate_api_key(x_api_key: Optional[str] = Header(None), authorizatio
 @router.post("/v1/messages")
 async def create_message(request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)):
     try:
-        logger.debug(
-            f"Processing Claude request: model={request.model}, stream={request.stream}"
-        )
-
         # Generate unique request ID for cancellation tracking
         request_id = str(uuid.uuid4())
+
+        # Map Claude model to OpenAI model and tier
+        openai_model, model_tier = model_manager.map_claude_model_to_openai(request.model)
+
+        # Log incoming request with model info
+        logger.info("Request [%s] model=%s -> %s (tier=%s, stream=%s)",
+                    request_id[:8], request.model, openai_model, model_tier, request.stream)
 
         # Convert Claude request to OpenAI format
         openai_request = convert_claude_to_openai(request, model_manager)
