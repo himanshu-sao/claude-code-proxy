@@ -10,7 +10,7 @@ on each restart, with console output also enabled.
 import logging
 import sys
 import os
-from typing import Optional
+from typing import Optional, Any
 
 from src.core.config import config
 
@@ -70,6 +70,52 @@ def get_logger(name: str) -> logging.Logger:
 
 # Pre-made logger for legacy imports (endpoints.py, etc.)
 logger = get_logger("proxy")
+
+
+# ---------------------------------------------------------------------------
+# Redaction helpers
+# ---------------------------------------------------------------------------
+# Centralized redaction utilities for log-friendly summaries of values that
+# may carry request/response message content (text, tool arguments, base64
+# image payloads). Use these instead of logging raw chunks/exceptions, which
+# can echo user content back into logs.
+
+# How many characters of a value to keep when a short, non-sensitive prefix is
+# useful for debugging without capturing message bodies.
+_REDACT_PREFIX_LEN = 40
+
+
+def redact_brief(value: Any, max_len: int = _REDACT_PREFIX_LEN) -> str:
+    """Return a non-sensitive, length-bounded summary of ``value``.
+
+    Returns ``type(value).__name__`` plus a truncated ``len`` for list/str/
+    bytes values (the common shapes of chunk/exception payloads), rather than
+    the content itself, so message text and base64 data never reach logs.
+    """
+    if value is None:
+        return "None"
+    if isinstance(value, (bytes, bytearray)):
+        return f"bytes(len={len(value)})"
+    if isinstance(value, str):
+        return f"str(len={len(value)})"
+    if isinstance(value, list):
+        return f"list(len={len(value)})"
+    return type(value).__name__
+
+
+def safe_error_summary(exc: BaseException) -> str:
+    """Return a log-safe summary of an exception (type name + status only).
+
+    ``str(exc)`` is avoided because OpenAI SDK error messages frequently embed
+    the rejected request body or streamed content. Callers that need a
+    user-facing message should resolve one via :func:`classify_openai_error`
+    style helpers, not from this summary.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return f"{type(exc).__name__}(status={status})"
+    return type(exc).__name__
+
 
 # ---------------------------------------------------------------------------
 # Model-in-use marker

@@ -2,6 +2,7 @@ import json
 import uuid
 from fastapi import HTTPException, Request
 from src.core.constants import Constants
+from src.core.logging import redact_brief, safe_error_summary
 from src.models.claude import ClaudeMessagesRequest
 
 
@@ -113,7 +114,9 @@ async def convert_openai_streaming_to_claude(
                             continue
                     except json.JSONDecodeError as e:
                         logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
+                            "Failed to parse chunk: %s, error: %s",
+                            redact_brief(chunk_data),
+                            safe_error_summary(e),
                         )
                         continue
 
@@ -190,13 +193,16 @@ async def convert_openai_streaming_to_claude(
 
     except Exception as e:
         # Handle any streaming errors gracefully
-        logger.error(f"Streaming error: {e}")
+        logger.error("Streaming error: %s", safe_error_summary(e))
         import traceback
 
         logger.error(traceback.format_exc())
         error_event = {
             "type": "error",
-            "error": {"type": "api_error", "message": f"Streaming error: {str(e)}"},
+            "error": {
+                "type": "api_error",
+                "message": f"Streaming error: {safe_error_summary(e)}",
+            },
         }
         yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
         return
@@ -272,7 +278,9 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                             continue
                     except json.JSONDecodeError as e:
                         logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
+                            "Failed to parse chunk: %s, error: %s",
+                            redact_brief(chunk_data),
+                            safe_error_summary(e),
                         )
                         continue
 
@@ -363,13 +371,16 @@ async def convert_openai_streaming_to_claude_with_cancellation(
             raise
     except Exception as e:
         # Handle any streaming errors gracefully
-        logger.error(f"Streaming error: {e}")
+        logger.error("Streaming error: %s", safe_error_summary(e))
         import traceback
 
         logger.error(traceback.format_exc())
         error_event = {
             "type": "error",
-            "error": {"type": "api_error", "message": f"Streaming error: {str(e)}"},
+            "error": {
+                "type": "api_error",
+                "message": f"Streaming error: {safe_error_summary(e)}",
+            },
         }
         yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
         return
