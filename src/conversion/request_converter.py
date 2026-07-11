@@ -19,37 +19,20 @@ def convert_claude_to_openai(
     # Convert messages
     openai_messages = []
 
-    # Add system message if present
-    if claude_request.system:
-        system_text = ""
-        if isinstance(claude_request.system, str):
-            system_text = claude_request.system
-        elif isinstance(claude_request.system, list):
-            text_parts = []
-            for block in claude_request.system:
-                if hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
-                    text_parts.append(block.text)
-                elif (
-                    isinstance(block, dict)
-                    and block.get("type") == Constants.CONTENT_TEXT
-                ):
-                    text_parts.append(block.get("text", ""))
-            system_text = "\n\n".join(text_parts)
+    # Collect system prompt text. Claude accepts system instructions via the
+    # top-level `system` field and also as standalone `{"role": "system"}`
+    # messages. We gather both here and fold them into the request below.
+    system_parts: List[str] = []
 
-        # Adjust for routers that reject 'system' role (e.g., NVIDIA NIM Qwen)
-        # If a system prompt exists, prepend it to the first user message. If no user message is present, create a user message containing the system text.
-        if system_text.strip():
-            # Find the index of the first user message in openai_messages (if any added already)
-            inserted = False
-            for idx, m in enumerate(openai_messages):
-                if m.get("role") == Constants.ROLE_USER:
-                    # Prepend system text with a newline separator
-                    m["content"] = system_text.strip() + "\n\n" + m.get("content", "")
-                    inserted = True
-                    break
-            if not inserted:
-                # No user message yet – add a user message with the system text
-                openai_messages.append({"role": Constants.ROLE_USER, "content": system_text.strip()})
+    if claude_request.system:
+        if isinstance(claude_request.system, str):
+            system_parts.append(claude_request.system)
+        elif isinstance(claude_request.system, list):
+            for block in claude_request.system:
+                if isinstance(block, dict) and block.get("type") == Constants.CONTENT_TEXT:
+                    system_parts.append(block.get("text", ""))
+                elif hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
+                    system_parts.append(block.text)
 
     # Process Claude messages
     i = 0
@@ -79,8 +62,30 @@ def convert_claude_to_openai(
                     i += 1  # Skip to tool result message
                     tool_results = convert_claude_tool_results(next_msg)
                     openai_messages.extend(tool_results)
+        elif msg.role == Constants.ROLE_SYSTEM:
+            # Fold message-level system role into the system prompt collected
+            # below rather than dropping it (some clients pass system as a
+            # message instead of the top-level `system` field).
+            system_parts.append(_extract_text(msg.content))
 
         i += 1
+
+    # Apply the system prompt. Many downstream routers (e.g. NVIDIA NIM Qwen)
+    # reject the 'system' role, so prepend the system text to the first user
+    # message; if none exists, add a user message carrying it.
+    system_text = "\n\n".join(p for p in system_parts if p and p.strip())
+    if system_text.strip():
+        system_text = system_text.strip()
+        merged = False
+        for m in openai_messages:
+            if m.get("role") == Constants.ROLE_USER:
+                existing = m.get("content", "")
+                if isinstance(existing, str):
+                    m["content"] = system_text + "\n\n" + existing
+                    merged = True
+                    break
+        if not merged:
+            openai_messages.insert(0, {"role": Constants.ROLE_USER, "content": system_text})
 
     # Build OpenAI request
     openai_request = {
@@ -94,24 +99,17 @@ def convert_claude_to_openai(
         "stream": claude_request.stream,
     }
     # Log only non-sensitive routing metadata; never log message content
-    # (system/user text or base64 image payloads) at any level.
-    _msg_count = len(openai_messages)
-    _content_len = sum(
-        len(m.get("content") if isinstance(m.get("content"), str) else "")
-        + sum(
-            len(p.get("text", "")) for p in m["content"]
-            if isinstance(m.get("content"), list)
-            and isinstance(p, dict)
-            and p.get("type") in ("text", "input_text")
+    # (system/user text or base64 image payloads) at any level. The
+    # char-counting work is gated on DEBUG level so a debug-only metric
+    # can never break request handling and is skipped in production.
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Converted Claude -> OpenAI: model=%s, messages=%d, content_chars=%d, "
+            "max_tokens=%d, stream=%s",
+            openai_model, len(openai_messages),
+            _message_content_char_len(openai_messages),
+            openai_request["max_tokens"], openai_request["stream"],
         )
-        for m in openai_messages
-    )
-    logger.debug(
-        "Converted Claude -> OpenAI: model=%s, messages=%d, content_chars=%d, "
-        "max_tokens=%d, stream=%s",
-        openai_model, _msg_count, _content_len,
-        openai_request["max_tokens"], openai_request["stream"],
-    )
     # Add optional parameters
     if claude_request.stop_sequences:
         openai_request["stop"] = claude_request.stop_sequences
@@ -142,7 +140,10 @@ def convert_claude_to_openai(
         if choice_type == "auto":
             openai_request["tool_choice"] = "auto"
         elif choice_type == "any":
-            openai_request["tool_choice"] = "auto"
+            # Claude "any" forces the model to call at least one tool; the
+            # OpenAI equivalent is "required", not "auto" (which allows a
+            # plain-text reply with no tool call).
+            openai_request["tool_choice"] = "required"
         elif choice_type == "tool" and "name" in claude_request.tool_choice:
             openai_request["tool_choice"] = {
                 "type": Constants.TOOL_FUNCTION,
@@ -152,6 +153,60 @@ def convert_claude_to_openai(
             openai_request["tool_choice"] = "auto"
 
     return openai_request
+
+
+def _message_content_char_len(messages: List[Dict[str, Any]]) -> int:
+    """Return the total character count of text in OpenAI-format messages.
+
+    Used only as a non-sensitive size hint for DEBUG logging: it counts text
+    length across every message while ignoring base64 image payloads and tool
+    call arguments. Handles all content shapes produced by the converter
+    (plain string, ``None``, and lists of text/``image_url`` part dicts)
+    without raising, so a debug-only metric can never break request handling.
+    """
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if content is None:
+            continue
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == Constants.CONTENT_TEXT
+                    and isinstance(part.get("text"), str)
+                ):
+                    total += len(part["text"])
+    return total
+
+
+def _extract_text(content: Any) -> str:
+    """Flatten Claude message content into a plain string.
+
+    Accepts the union of content shapes a ``ClaudeMessage`` may hold
+    (``None``, ``str``, or a list of content blocks) and returns the joined
+    text of any text blocks. Used to turn ``{"role": "system"}`` messages
+    into system-prompt text. Returns ``""`` for non-text / unsupported
+    content rather than raising.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+            elif isinstance(block, dict) and block.get("type") == Constants.CONTENT_TEXT:
+                t = block.get("text", "")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "\n".join(parts)
+    return ""
 
 
 def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
@@ -186,8 +241,14 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
 
     if len(openai_content) == 1 and openai_content[0]["type"] == "text":
         return {"role": Constants.ROLE_USER, "content": openai_content[0]["text"]}
-    else:
+    elif openai_content:
         return {"role": Constants.ROLE_USER, "content": openai_content}
+    else:
+        # No convertible parts (e.g. only URL-sourced images, which this
+        # proxy doesn't support yet). Fall back to an empty string rather
+        # than emitting content: [], which most routers reject as a
+        # non-empty validation error.
+        return {"role": Constants.ROLE_USER, "content": ""}
 
 
 def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
@@ -196,8 +257,10 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
     tool_calls = []
 
     if msg.content is None:
-        return {"role": Constants.ROLE_ASSISTANT, "content": None}
-    
+        # Empty string keeps the field present for routers that reject
+        # content: null on an assistant message.
+        return {"role": Constants.ROLE_ASSISTANT, "content": ""}
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
@@ -218,11 +281,13 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
 
     openai_message = {"role": Constants.ROLE_ASSISTANT}
 
-    # Set content
+    # Set content. Use an empty string (never None) when there is no text so
+    # routers that reject content: null on an assistant message accept the
+    # turn; tool_calls carry any invoked tools separately.
     if text_parts:
-        openai_message["content"] = "".join(text_parts)
+        openai_message["content"] = "\n".join(text_parts)
     else:
-        openai_message["content"] = None
+        openai_message["content"] = ""
 
     # Set tool calls
     if tool_calls:
