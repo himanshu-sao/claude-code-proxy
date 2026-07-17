@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
+import os
 import time
 import uuid
 from typing import Optional
@@ -17,6 +18,36 @@ from src.conversion.response_converter import (
 from src.core.model_manager import model_manager
 
 router = APIRouter()
+
+# Location of the per-request state file written for the Claude Code statusline.
+# Mirrors the path resolution in src/core/logging.py:28-31 so this lands next to
+# proxy.log regardless of the proxy's launch directory.
+_endpoints_file = os.path.abspath(__file__)
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(_endpoints_file)))
+_last_model_path = os.path.join(_project_root, "logs", ".last_model")
+
+
+def _write_last_model(tier: str, model: str) -> None:
+    """Persist the model the proxy actually routed this request to.
+
+    The statusline script reads logs/.last_model to display the real upstream model
+    (post health-aware fallback) rather than the model Claude Code requested. Writes
+    are atomic (temp file + os.replace) so a concurrent statusline read never sees a
+    partial file, and any failure is swallowed — the status file must never break a
+    request.
+    """
+    try:
+        log_dir = os.path.dirname(_last_model_path)
+        if not os.path.isdir(log_dir):
+            return
+        tmp_path = f"{_last_model_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(f"{tier}\t{model}\n")
+            fh.write(f"{datetime.now().isoformat()}\n")
+        os.replace(tmp_path, _last_model_path)
+    except Exception as exc:  # noqa: BLE001 — status file must never break a request
+        logger.debug("Failed to write .last_model: %s", exc)
+
 
 # Global client for compatibility; each request may obtain a fresh client via config.
 openai_client = config.get_next_client()
@@ -72,6 +103,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         )
         # Update the OpenAI request with the resolved model
         openai_request["model"] = openai_model
+        # Persist the actually-routed model (post-fallback) for the statusline.
+        _write_last_model(model_tier or "unknown", openai_model)
 
         if request.stream:
             # Streaming response - wrap in error handling
