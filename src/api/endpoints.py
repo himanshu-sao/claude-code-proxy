@@ -104,7 +104,11 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         # Update the OpenAI request with the resolved model
         openai_request["model"] = openai_model
         # Persist the actually-routed model (post-fallback) for the statusline.
-        _write_last_model(model_tier or "unknown", openai_model)
+        # Skip the "small" tier so the statusline keeps showing the last meaningful
+        # (non-small) upstream model rather than the lightweight fallback.
+        # Case-insensitive so "Small"/"SMALL" variants also skip the write.
+        if (model_tier or "").lower() != "small":
+            _write_last_model(model_tier or "unknown", openai_model)
 
         if request.stream:
             # Streaming response - wrap in error handling
