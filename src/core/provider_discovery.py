@@ -170,9 +170,9 @@ async def run_discovery_and_patch(
         # Is it in the cache we just loaded?
         if model in cached_limits or any(k.lower() in model_lower for k in cached_limits):
             continue
-        # Is it in the static built-in table?
-        if any(marker in model_lower for marker, _, _ in context_manager._BUILTIN_LIMITS):
-            continue
+            
+        # We purposely DO NOT check _BUILTIN_LIMITS here. We want to fetch the real 
+        # accurate limits from the provider rather than settling for our hardcoded guesses.
         
         missing_models.append(model)
 
