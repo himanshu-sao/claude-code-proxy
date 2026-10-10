@@ -132,16 +132,74 @@ async def run_discovery_and_patch(
     api_key: str,
     custom_headers: Optional[dict] = None,
 ) -> None:
-    """Discover limits and patch them into context_manager._DISCOVERED_LIMITS."""
-    from src.core import context_manager  # local import to avoid circular deps
+    """Discover limits, utilizing a local cache file to avoid unnecessary API calls."""
+    from src.core import context_manager
+    from src.core.config import config
+    import json
+    import os
 
-    limits = await discover_provider_limits(
+    cache_file = "model_contexts_cache.json"
+    cached_limits: dict[str, tuple[int, int]] = {}
+
+    # 1. Load from local cache if it exists
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                raw_cache = json.load(f)
+                for k, v in raw_cache.items():
+                    if isinstance(v, list) and len(v) == 2:
+                        cached_limits[k] = (v[0], v[1])
+            _log.info("Loaded %d model limits from local cache (%s)", len(cached_limits), cache_file)
+        except Exception as exc:
+            _log.warning("Failed to load local context cache: %s", exc)
+
+    # Put cached limits into the active mapping immediately
+    if cached_limits:
+        context_manager._DISCOVERED_LIMITS.update(cached_limits)
+
+    # 2. Check if we actually need to make an API call
+    # We only call the API if a specifically configured model is totally unknown
+    configured_models = set(config.big_models + config.middle_models + config.small_models)
+    
+    missing_models = []
+    for model in configured_models:
+        model_lower = (model or "").lower()
+        # Is it in env overrides?
+        if model_lower in context_manager._ENV_OVERRIDES or any(k in model_lower for k in context_manager._ENV_OVERRIDES):
+            continue
+        # Is it in the cache we just loaded?
+        if model in cached_limits or any(k.lower() in model_lower for k in cached_limits):
+            continue
+        # Is it in the static built-in table?
+        if any(marker in model_lower for marker, _, _ in context_manager._BUILTIN_LIMITS):
+            continue
+        
+        missing_models.append(model)
+
+    if not missing_models:
+        _log.info("All configured models have known context limits. Skipping upstream discovery.")
+        return
+
+    _log.info("Missing context limits for configured models: %s. Initiating upstream discovery.", missing_models)
+
+    # 3. Make the API call to discover limits
+    new_limits = await discover_provider_limits(
         base_url=base_url,
         api_key=api_key,
         custom_headers=custom_headers,
     )
-    if limits:
-        context_manager._DISCOVERED_LIMITS.update(limits)
-        _log.info(
-            "Patched context_manager with %d discovered model limit(s).", len(limits)
-        )
+
+    if new_limits:
+        # Update the live mapping
+        context_manager._DISCOVERED_LIMITS.update(new_limits)
+        # Update our local cache dict
+        cached_limits.update(new_limits)
+        
+        # 4. Save back to disk
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(cached_limits, f, indent=2)
+            _log.info("Saved %d total discovered model limits to %s", len(cached_limits), cache_file)
+        except Exception as exc:
+            _log.warning("Failed to save local context cache: %s", exc)
+
