@@ -3,6 +3,7 @@ from src.api.endpoints import router as api_router
 import uvicorn
 import sys
 import logging
+import asyncio
 from src.core.config import config
 from src.core.logging import log_active_models
 
@@ -15,8 +16,22 @@ app.include_router(api_router)
 
 @app.on_event("startup")
 async def startup():
-    """Start the background model health checker on server startup."""
+    """Start the background model health checker and run model discovery on server startup."""
     config.start_health_checker()
+    
+    # Run provider model discovery in the background so it doesn't block startup
+    from src.core.provider_discovery import run_discovery_and_patch
+    
+    # We only probe the first provider in the rotation for limits to keep it simple
+    if config.providers:
+        prov = config.providers[0]
+        asyncio.create_task(
+            run_discovery_and_patch(
+                base_url=prov["base_url"],
+                api_key=prov["api_key"],
+                custom_headers=config.get_custom_headers(),
+            )
+        )
 
 
 def main():

@@ -67,6 +67,11 @@ def _parse_env_overrides() -> dict[str, tuple[int, int]]:
 
 _ENV_OVERRIDES = _parse_env_overrides()
 
+# Limits discovered at runtime by querying the upstream /v1/models endpoint.
+# Populated by provider_discovery.run_discovery_and_patch() on startup.
+# Keyed by exact model ID as returned by the provider.
+_DISCOVERED_LIMITS: dict[str, tuple[int, int]] = {}
+
 # Fraction of context window chars to keep when trimming (leaves headroom for output)
 _TRIM_RATIO = float(os.environ.get("CONTEXT_TRIM_RATIO", "0.85"))
 
@@ -74,8 +79,11 @@ _TRIM_RATIO = float(os.environ.get("CONTEXT_TRIM_RATIO", "0.85"))
 def get_model_limits(model_name: str) -> tuple[int, int]:
     """Return (context_window_tokens, max_output_tokens) for a model.
 
-    Checks env overrides first, then falls through built-in table, then
-    returns a safe default of (32_000, 4_096).
+    Lookup priority (highest → lowest):
+      1. Env overrides  (MODEL_CONTEXT_LIMITS)
+      2. Runtime-discovered limits from the upstream /v1/models endpoint
+      3. Built-in static table
+      4. Safe default (32_000, 4_096)
     """
     name_lower = (model_name or "").lower()
 
@@ -86,13 +94,21 @@ def get_model_limits(model_name: str) -> tuple[int, int]:
         if key in name_lower:
             return limits
 
-    # 2. built-in table (substring match in order)
+    # 2. runtime-discovered limits (exact match then substring)
+    if model_name in _DISCOVERED_LIMITS:
+        return _DISCOVERED_LIMITS[model_name]
+    for disc_id, limits in _DISCOVERED_LIMITS.items():
+        if disc_id.lower() in name_lower or name_lower in disc_id.lower():
+            return limits
+
+    # 3. built-in table (substring match in order)
     for marker, ctx, out in _BUILTIN_LIMITS:
         if marker in name_lower:
             return ctx, out
 
-    # 3. safe default
+    # 4. safe default
     return 32_000, 4_096
+
 
 
 def estimate_tokens(messages: list[dict]) -> int:
