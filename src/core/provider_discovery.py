@@ -189,17 +189,41 @@ async def run_discovery_and_patch(
         custom_headers=custom_headers,
     )
 
+    # 4. Process all missing models (fallback if API didn't provide metadata)
+    added_to_cache = False
+    
+    # Update live mapping with any new discoveries first
     if new_limits:
-        # Update the live mapping
         context_manager._DISCOVERED_LIMITS.update(new_limits)
-        # Update our local cache dict
         cached_limits.update(new_limits)
-        
-        # 4. Save back to disk
+        added_to_cache = True
+
+    # For any configured model that NIM/OpenAI didn't provide context metadata for, 
+    # we inject a fallback so the user can manually edit it in the JSON file.
+    for model in missing_models:
+        if model not in cached_limits:
+            # First try our built-in table
+            model_lower = (model or "").lower()
+            found = False
+            for marker, ctx, out in context_manager._BUILTIN_LIMITS:
+                if marker in model_lower:
+                    cached_limits[model] = (ctx, out)
+                    found = True
+                    break
+            
+            # Absolute fallback
+            if not found:
+                cached_limits[model] = (32_000, 4_096)
+                
+            context_manager._DISCOVERED_LIMITS[model] = cached_limits[model]
+            added_to_cache = True
+
+    if added_to_cache:
+        # 5. Save back to disk
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(cached_limits, f, indent=2)
-            _log.info("Saved %d total discovered model limits to %s", len(cached_limits), cache_file)
+            _log.info("Saved %d total model limits to %s", len(cached_limits), cache_file)
         except Exception as exc:
             _log.warning("Failed to save local context cache: %s", exc)
 
