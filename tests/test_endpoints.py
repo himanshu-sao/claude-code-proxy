@@ -5,20 +5,28 @@ from src.conversion.request_converter import _is_reasoning_model
 client = TestClient(app)
 
 def test_list_models():
+    from src.core.config import config
     response = client.get("/v1/models")
     assert response.status_code == 200
     data = response.json()
     assert data["object"] == "list"
     assert data["has_more"] is False
     assert isinstance(data["data"], list)
-    assert len(data["data"]) == 4
-    first_item = data["data"][0]
-    assert first_item["type"] == "model"
-    assert first_item["object"] == "model"
-    assert "display_name" in first_item
-    assert "created_at" in first_item
+    # Should only contain the 3 configured tier primaries (may collapse to fewer if they overlap)
+    assert 1 <= len(data["data"]) <= 3
+    for item in data["data"]:
+        assert item["type"] == "model"
+        assert item["object"] == "model"
+        assert "display_name" in item
+        assert "created_at" in item
+        # display_name should not contain raw date suffixes like -20241022
+        import re
+        assert not re.search(r"-\d{8}", item["display_name"])
     model_ids = [m["id"] for m in data["data"]]
-    assert "claude-3-5-sonnet-20241022" in model_ids
+    # The configured primaries must be in the list
+    assert config.big_model in model_ids or config.middle_model in model_ids or config.small_model in model_ids
+
+
 
 
 def test_api_hello_endpoint():

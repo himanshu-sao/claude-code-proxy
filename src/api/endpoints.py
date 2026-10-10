@@ -292,45 +292,44 @@ async def test_connection():
 
 @router.get("/v1/models")
 async def list_models(_: None = Depends(validate_api_key)):
-    """List available models in Anthropic and OpenAI dual-compatible format."""
-    models_metadata = [
-        {
-            "id": "claude-3-7-sonnet-20250219",
-            "display_name": "Claude 3.7 Sonnet",
-            "created_at": "2025-02-19T00:00:00Z",
-            "created": 1740000000,
-        },
-        {
-            "id": "claude-3-5-sonnet-20241022",
-            "display_name": "Claude 3.5 Sonnet",
-            "created_at": "2024-10-22T00:00:00Z",
-            "created": 1729555200,
-        },
-        {
-            "id": "claude-3-5-haiku-20241022",
-            "display_name": "Claude 3.5 Haiku",
-            "created_at": "2024-10-22T00:00:00Z",
-            "created": 1729555200,
-        },
-        {
-            "id": "claude-3-opus-20240229",
-            "display_name": "Claude 3 Opus",
-            "created_at": "2024-02-29T00:00:00Z",
-            "created": 1709164800,
-        },
-    ]
+    """List available models using the primaries from BIG_MODEL, MIDDLE_MODEL, and SMALL_MODEL.
+
+    Only the *first* model from each tier is advertised — these are the actual
+    models Claude Code will route to. No hardcoded defaults are mixed in so the
+    picker stays clean and unambiguous.
+    """
+    def _display_name(model_id: str) -> str:
+        """Derive a human-readable display name from a model ID.
+
+        Strips trailing date suffixes (e.g. '-20241022') and converts
+        hyphens/underscores/slashes to spaces, then title-cases the result.
+        """
+        import re
+        name = model_id.split("/")[-1]               # drop org prefix, e.g. openai/gpt-4o -> gpt-4o
+        name = re.sub(r"-\d{8}$", "", name)          # strip date suffix, e.g. -20241022
+        name = name.replace("-", " ").replace("_", " ")
+        return name.title()
+
+    # Collect the active primary for each tier, deduplicating in order.
+    seen: list[str] = []
+    for model_name in [config.big_model, config.middle_model, config.small_model]:
+        if model_name and model_name not in seen:
+            seen.append(model_name)
+
+    now_ts = int(time.time())
+    now_iso = datetime.now().isoformat()
 
     data = [
         {
-            "id": m["id"],
+            "id": m,
             "type": "model",
             "object": "model",
-            "display_name": m["display_name"],
-            "created_at": m["created_at"],
-            "created": m["created"],
+            "display_name": _display_name(m),
+            "created_at": now_iso,
+            "created": now_ts,
             "owned_by": "claude-code-proxy",
         }
-        for m in models_metadata
+        for m in seen
     ]
 
     return {
@@ -340,6 +339,7 @@ async def list_models(_: None = Depends(validate_api_key)):
         "first_id": data[0]["id"] if data else None,
         "last_id": data[-1]["id"] if data else None,
     }
+
 
 
 
