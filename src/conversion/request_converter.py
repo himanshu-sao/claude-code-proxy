@@ -13,8 +13,9 @@ def convert_claude_to_openai(
 ) -> Dict[str, Any]:
     """Convert Claude API request format to OpenAI format."""
 
-    # Map model
-    openai_model = model_manager.map_claude_model_to_openai(claude_request.model)
+    # Map model. map_claude_model_to_openai returns a (model, tier) tuple; we
+    # only need the model name here (endpoints.py re-resolves the tier later).
+    openai_model, _tier = model_manager.map_claude_model_to_openai(claude_request.model)
 
     # Convert messages
     openai_messages = []
@@ -95,9 +96,16 @@ def convert_claude_to_openai(
             max(claude_request.max_tokens, config.min_tokens_limit),
             config.max_tokens_limit,
         ),
-        "temperature": claude_request.temperature,
         "stream": claude_request.stream,
     }
+
+    # Reasoning models (e.g. moonshotai/kimi-k3, deepseek-reasoner) reject
+    # `temperature` and `top_p` and instead expect `reasoning_effort`. Detect
+    # them by model name and switch parameter sets accordingly.
+    if _is_reasoning_model(openai_model):
+        openai_request["reasoning_effort"] = claude_request.reasoning_effort or "high"
+    else:
+        openai_request["temperature"] = claude_request.temperature
     # Log only non-sensitive routing metadata; never log message content
     # (system/user text or base64 image payloads) at any level. The
     # char-counting work is gated on DEBUG level so a debug-only metric
@@ -113,7 +121,7 @@ def convert_claude_to_openai(
     # Add optional parameters
     if claude_request.stop_sequences:
         openai_request["stop"] = claude_request.stop_sequences
-    if claude_request.top_p is not None:
+    if claude_request.top_p is not None and not _is_reasoning_model(openai_model):
         openai_request["top_p"] = claude_request.top_p
 
     # Convert tools
@@ -153,6 +161,29 @@ def convert_claude_to_openai(
             openai_request["tool_choice"] = "auto"
 
     return openai_request
+
+
+def _is_reasoning_model(model_name: str) -> bool:
+    """Return True if the upstream model is a reasoning model.
+
+    Reasoning models (e.g. NVIDIA NIM's moonshotai/kimi-k3, DeepSeek-R1-style
+    models, OpenAI o-series) reject `temperature` / `top_p` and expect
+    `reasoning_effort` instead. Detecting by name is a heuristic: it covers the
+    common reasoning-model identifiers without needing a per-provider registry.
+    """
+    name = (model_name or "").lower()
+    markers = (
+        "kimi-k3",
+        "reasoner",
+        "reasoning",
+        "-o1", "-o3", "-o4",
+        "o1-", "o3-", "o4-",
+        "o1/", "o3/", "o4/",
+        "deepseek-r1", "deepseek/r1",
+        "-r1", "_r1", "/r1", "r1-", "r1_",
+    )
+    return any(m in name for m in markers)
+
 
 
 def _message_content_char_len(messages: List[Dict[str, Any]]) -> int:

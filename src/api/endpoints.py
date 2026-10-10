@@ -290,6 +290,36 @@ async def test_connection():
         )
 
 
+@router.get("/v1/models")
+async def list_models(_: None = Depends(validate_api_key)):
+    """List available models in OpenAI format for model discovery compatibility."""
+    claude_models = [
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229",
+        "claude-3-sonnet-20240229",
+        "claude-3-haiku-20240307",
+    ]
+    configured_models = list(set(config.big_models + config.middle_models + config.small_models))
+    all_model_ids = list(dict.fromkeys(claude_models + configured_models))
+    
+    created_time = int(time.time())
+    data = [
+        {
+            "id": model_id,
+            "object": "model",
+            "created": created_time,
+            "owned_by": "claude-code-proxy",
+        }
+        for model_id in all_model_ids
+    ]
+    return {
+        "object": "list",
+        "data": data,
+    }
+
+
 @router.get("/")
 async def root():
     """Root endpoint"""
@@ -307,7 +337,9 @@ async def root():
         "endpoints": {
             "messages": "/v1/messages",
             "count_tokens": "/v1/messages/count_tokens",
+            "models": "/v1/models",
             "health": "/health",
             "test_connection": "/test-connection",
         },
     }
+

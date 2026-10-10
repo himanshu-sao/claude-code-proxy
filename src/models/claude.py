@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional, Union, Literal
 
 class ClaudeContentBlockText(BaseModel):
@@ -24,9 +24,19 @@ class ClaudeSystemContent(BaseModel):
     type: Literal["text"]
     text: str
 
+# Catch-all for content block types Claude Code may send on beta requests
+# (e.g. thinking / redacted_thinking / search_result blocks). Keeping these
+# permissive avoids a 422 on the whole request just because one block type is
+# unfamiliar; the converter already ignores unknown block types downstream.
+class ClaudeContentBlockOther(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str
+    # All other fields are accepted via extra="allow".
+
 class ClaudeMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
-    content: Union[str, List[Union[ClaudeContentBlockText, ClaudeContentBlockImage, ClaudeContentBlockToolUse, ClaudeContentBlockToolResult]]]
+    model_config = ConfigDict(extra="allow")
+    role: str
+    content: Union[str, List[Union[ClaudeContentBlockText, ClaudeContentBlockImage, ClaudeContentBlockToolUse, ClaudeContentBlockToolResult, ClaudeContentBlockOther]]]
 
 class ClaudeTool(BaseModel):
     name: str
@@ -37,6 +47,7 @@ class ClaudeThinkingConfig(BaseModel):
     enabled: bool = True
 
 class ClaudeMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
     model: str
     max_tokens: int
     messages: List[ClaudeMessage]
@@ -50,8 +61,10 @@ class ClaudeMessagesRequest(BaseModel):
     tools: Optional[List[ClaudeTool]] = None
     tool_choice: Optional[Dict[str, Any]] = None
     thinking: Optional[ClaudeThinkingConfig] = None
+    reasoning_effort: Optional[Literal["low", "medium", "high", "max"]] = None
 
 class ClaudeTokenCountRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
     model: str
     messages: List[ClaudeMessage]
     system: Optional[Union[str, List[ClaudeSystemContent]]] = None
