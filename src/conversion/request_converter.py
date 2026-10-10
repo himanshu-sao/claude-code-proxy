@@ -4,6 +4,8 @@ import logging
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
+from src.core.context_manager import trim_messages_to_fit
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,14 @@ def convert_claude_to_openai(
         ),
         "stream": claude_request.stream,
     }
+
+    # Trim conversation history to fit within the model's context window.
+    # This runs before any parameter enrichment so the trimmed list is final.
+    trimmed_messages, clamped_max_tokens = trim_messages_to_fit(
+        openai_messages, openai_model, openai_request["max_tokens"]
+    )
+    openai_request["messages"] = trimmed_messages
+    openai_request["max_tokens"] = clamped_max_tokens
 
     # Reasoning models (e.g. moonshotai/kimi-k3, deepseek-reasoner) reject
     # `temperature` and `top_p` and instead expect `reasoning_effort`. Detect

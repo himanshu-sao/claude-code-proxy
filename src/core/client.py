@@ -196,7 +196,22 @@ class OpenAIClient:
     def classify_openai_error(self, error_detail: Any) -> str:
         """Provide specific error guidance for common OpenAI API issues."""
         error_str = str(error_detail).lower()
-        
+
+        # Context length / token limit exceeded
+        if (
+            "context_length_exceeded" in error_str
+            or "maximum context length" in error_str
+            or "string too long" in error_str
+            or "context window" in error_str
+            or "too many tokens" in error_str
+        ):
+            return (
+                "Context window exceeded: the conversation is too long for this model. "
+                "The proxy attempted to trim the history automatically. "
+                "If this persists, consider increasing CONTEXT_TRIM_RATIO or using a model "
+                "with a larger context window."
+            )
+
         # Region/country restrictions
         if "unsupported_country_region_territory" in error_str or "country, region, or territory not supported" in error_str:
             return "OpenAI API is not available in your region. Consider using a VPN or Azure OpenAI service."
@@ -219,6 +234,7 @@ class OpenAIClient:
         
         # Default: return original message
         return str(error_detail)
+
     
     def _report_model_error(self, status_code: int, error_detail: str):
         """Report model errors to config for fallback tracking."""
