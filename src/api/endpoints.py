@@ -292,32 +292,63 @@ async def test_connection():
 
 @router.get("/v1/models")
 async def list_models(_: None = Depends(validate_api_key)):
-    """List available models in OpenAI format for model discovery compatibility."""
-    claude_models = [
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-opus-20240229",
-        "claude-3-sonnet-20240229",
-        "claude-3-haiku-20240307",
+    """List available models in Anthropic and OpenAI dual-compatible format."""
+    models_metadata = [
+        {
+            "id": "claude-3-7-sonnet-20250219",
+            "display_name": "Claude 3.7 Sonnet",
+            "created_at": "2025-02-19T00:00:00Z",
+            "created": 1740000000,
+        },
+        {
+            "id": "claude-3-5-sonnet-20241022",
+            "display_name": "Claude 3.5 Sonnet",
+            "created_at": "2024-10-22T00:00:00Z",
+            "created": 1729555200,
+        },
+        {
+            "id": "claude-3-5-haiku-20241022",
+            "display_name": "Claude 3.5 Haiku",
+            "created_at": "2024-10-22T00:00:00Z",
+            "created": 1729555200,
+        },
+        {
+            "id": "claude-3-opus-20240229",
+            "display_name": "Claude 3 Opus",
+            "created_at": "2024-02-29T00:00:00Z",
+            "created": 1709164800,
+        },
     ]
-    configured_models = list(set(config.big_models + config.middle_models + config.small_models))
-    all_model_ids = list(dict.fromkeys(claude_models + configured_models))
-    
-    created_time = int(time.time())
+
     data = [
         {
-            "id": model_id,
+            "id": m["id"],
+            "type": "model",
             "object": "model",
-            "created": created_time,
+            "display_name": m["display_name"],
+            "created_at": m["created_at"],
+            "created": m["created"],
             "owned_by": "claude-code-proxy",
         }
-        for model_id in all_model_ids
+        for m in models_metadata
     ]
+
     return {
         "object": "list",
         "data": data,
+        "has_more": False,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
     }
+
+
+
+@router.api_route("/api/hello", methods=["GET", "HEAD"])
+@router.api_route("/hello", methods=["GET", "HEAD"])
+async def api_hello():
+    """Health probe endpoint used by Anthropic clients and Claude extensions."""
+    return {"status": "ok"}
+
 
 
 @router.get("/")

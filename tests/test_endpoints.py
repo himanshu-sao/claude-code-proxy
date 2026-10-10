@@ -9,17 +9,26 @@ def test_list_models():
     assert response.status_code == 200
     data = response.json()
     assert data["object"] == "list"
+    assert data["has_more"] is False
     assert isinstance(data["data"], list)
-    assert len(data["data"]) > 0
+    assert len(data["data"]) == 4
+    first_item = data["data"][0]
+    assert first_item["type"] == "model"
+    assert first_item["object"] == "model"
+    assert "display_name" in first_item
+    assert "created_at" in first_item
     model_ids = [m["id"] for m in data["data"]]
     assert "claude-3-5-sonnet-20241022" in model_ids
 
-def test_root_endpoint():
-    response = client.get("/")
-    assert response.status_code == 200
-    data = response.json()
-    assert "models" in data["endpoints"]
-    assert data["endpoints"]["models"] == "/v1/models"
+
+def test_api_hello_endpoint():
+    res_get = client.get("/api/hello")
+    assert res_get.status_code == 200
+    assert res_get.json() == {"status": "ok"}
+
+    res_head = client.head("/api/hello")
+    assert res_head.status_code == 200
+
 
 def test_is_reasoning_model():
     assert _is_reasoning_model("deepseek-r1") is True
