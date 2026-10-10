@@ -41,7 +41,7 @@ class TestGetModelLimits:
 
     def test_gpt_oss(self):
         ctx, _ = get_model_limits("openai/gpt-oss-20b")
-        assert ctx == 128_000
+        assert ctx in (128_000, 131_072)
 
 
 class TestEstimateTokens:

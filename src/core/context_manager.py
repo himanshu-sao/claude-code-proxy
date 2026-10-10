@@ -34,17 +34,21 @@ _BUILTIN_LIMITS: list[tuple[str, int, int]] = [
     # DeepSeek
     ("deepseek-r1",      64_000, 8_192),
     ("deepseek",         64_000, 8_192),
-    # Kimi / Moonshot
-    ("kimi-k3",         131_072, 16_384),
-    ("moonshot",        128_000, 8_192),
-    # Llama / Ollama
-    ("llama3.1:70b",    128_000, 8_192),
-    ("llama3",          128_000, 8_192),
-    ("llama",            32_000, 4_096),
-    # NVIDIA NIM / generic
-    ("nv-",             128_000, 4_096),
-    ("gpt-oss",         128_000, 16_384),
+    # NVIDIA NIM & Configured Models
+    ("glm-5.3-flash",                 1_048_576, 128_000),
+    ("glm-5.3",                       1_048_576, 128_000),
+    ("nemotron-3-ultra-550b",         1_048_576, 32_768),
+    ("nemotron-3.5-lightning-30b",     1_048_576, 32_768),
+    ("kimi-k3",                       1_048_576, 32_768),
+    ("deepseek-v4.1-flash",           1_048_576, 32_768),
+    ("laguna-xs-2.1",                   262_144, 32_000),
+    ("muse-glimmer-30b",                131_072, 16_384),
+    ("mistral-nemotron",                128_000, 16_384),
+    ("gpt-oss-20b",                     131_072, 16_384),
+    ("gpt-oss",                         131_072, 16_384),
+    ("nv-",                             128_000, 4_096),
 ]
+
 
 # Conservative estimate: characters per token (English text ~ 4 chars/token)
 _CHARS_PER_TOKEN = 4

@@ -8,6 +8,10 @@ cd "$(dirname "$0")"
 # Load PORT from .env if available, otherwise default to 8082
 if [ -f .env ]; then
     PORT=$(grep '^PORT=' .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    ENV_ANTHROPIC_KEY=$(grep '^ANTHROPIC_API_KEY=' .env | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+    if [ -z "$ENV_ANTHROPIC_KEY" ]; then
+        unset ANTHROPIC_API_KEY
+    fi
 fi
 PORT=${PORT:-8082}
 

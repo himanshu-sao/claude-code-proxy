@@ -177,4 +177,3 @@ pyrightconfig.json
 n
 .proxy.pid
 logs/
-model_contexts_cache.json

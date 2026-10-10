@@ -16,9 +16,12 @@ class Config:
             raise ValueError("OPENAI_API_KEY not found in environment variables")
         
         # Add Anthropic API key for client validation
-        self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        raw_anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if raw_anthropic_key:
+            raw_anthropic_key = raw_anthropic_key.strip().strip("'\"")
+        self.anthropic_api_key = raw_anthropic_key if raw_anthropic_key else None
         if not self.anthropic_api_key:
-            _log.warning("ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
+            _log.info("ANTHROPIC_API_KEY not set or empty. Client API key validation is disabled.")
         
         self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
