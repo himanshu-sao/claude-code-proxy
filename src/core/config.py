@@ -51,6 +51,13 @@ class Config:
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
+
+        # Optional global override for reasoning effort. When set, it takes
+        # precedence over whatever Claude Code sends in reasoning_effort.
+        # Accepts low|medium|high|max|xhigh (xhigh normalizes to max).
+        # Validated lazily by the effort mapper so a bad value degrades to the
+        # default instead of crashing the proxy at startup.
+        self.reasoning_effort_override = os.environ.get("REASONING_EFFORT")
         
         # --- Multi-model support with fallback (comma-separated) ---
         # Each tier can have a list of models separated by commas.

@@ -5,6 +5,11 @@ from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
 from src.core.context_manager import trim_messages_to_fit
+from src.conversion.effort_mapper import (
+    normalize_effort,
+    provider_effort,
+    resolve_effort,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -109,12 +114,31 @@ def convert_claude_to_openai(
     openai_request["messages"] = trimmed_messages
     openai_request["max_tokens"] = clamped_max_tokens
 
-    # Reasoning models (e.g. moonshotai/kimi-k3, deepseek-reasoner) reject
-    # `temperature` and `top_p` and instead expect `reasoning_effort`. Detect
-    # them by model name and switch parameter sets accordingly.
+    # Reasoning effort routing. normalize_effort resolves the canonical level
+    # (config override wins over the value Claude Code sent), and
+    # resolve_effort renders the provider-specific envelope: a top-level
+    # reasoning_effort (string or numeric) for NIM GLM / gpt-oss / o-series /
+    # deepseek, chat_template_kwargs for Nemotron, or nothing for always-on
+    # thinking and non-reasoning models.
+    canonical = normalize_effort(
+        claude_request.reasoning_effort, config.reasoning_effort_override
+    )
     if _is_reasoning_model(openai_model):
-        openai_request["reasoning_effort"] = claude_request.reasoning_effort or "high"
-    else:
+        spec = resolve_effort(openai_model, canonical)
+        if spec.reasoning_effort is not None:
+            openai_request["reasoning_effort"] = spec.reasoning_effort
+        if spec.chat_template_kwargs:
+            # Threaded through the OpenAI SDK's extra_body merge, which folds
+            # these keys into the outgoing request body.
+            openai_request.setdefault("extra_body", {}).update(
+                {"chat_template_kwargs": spec.chat_template_kwargs}
+            )
+
+    # A subset of reasoning models (kimi-k3, deepseek-r1, OpenAI o-series)
+    # reject temperature/top_p entirely; for those we drop sampling params.
+    # Others (deepseek-v4.1-flash, gpt-oss, glm-5) accept both sampling and
+    # reasoning controls, so temperature is still sent.
+    if not _rejects_sampling_params(openai_model):
         openai_request["temperature"] = claude_request.temperature
     # Log only non-sensitive routing metadata; never log message content
     # (system/user text or base64 image payloads) at any level. The
@@ -131,7 +155,7 @@ def convert_claude_to_openai(
     # Add optional parameters
     if claude_request.stop_sequences:
         openai_request["stop"] = claude_request.stop_sequences
-    if claude_request.top_p is not None and not _is_reasoning_model(openai_model):
+    if claude_request.top_p is not None and not _rejects_sampling_params(openai_model):
         openai_request["top_p"] = claude_request.top_p
 
     # Convert tools
@@ -174,12 +198,38 @@ def convert_claude_to_openai(
 
 
 def _is_reasoning_model(model_name: str) -> bool:
-    """Return True if the upstream model is a reasoning model.
+    """Return True if the upstream model has a controllable reasoning mode.
 
-    Reasoning models (e.g. NVIDIA NIM's moonshotai/kimi-k3, DeepSeek-R1-style
-    models, OpenAI o-series) reject `temperature` / `top_p` and expect
-    `reasoning_effort` instead. Detecting by name is a heuristic: it covers the
-    common reasoning-model identifiers without needing a per-provider registry.
+    This drives effort routing (resolve_effort). It is a superset of the models
+    that reject temperature/top_p — see _rejects_sampling_params. Detecting by
+    name is a heuristic: it covers the reasoning-model identifiers this proxy
+    targets without needing a per-provider registry.
+    """
+    name = (model_name or "").lower()
+    markers = (
+        "kimi-k3",
+        "reasoner",
+        "reasoning",
+        "thinking",
+        "-o1", "-o3", "-o4",
+        "o1-", "o3-", "o4-",
+        "o1/", "o3/", "o4/",
+        "deepseek-r1", "deepseek/r1",
+        "deepseek-v3.2", "deepseek-v4",
+        "-r1", "_r1", "/r1", "r1-", "r1_",
+        # Reasoning families this proxy routes effort to (see effort_mapper).
+        "glm-5", "z-ai", "gpt-oss", "nemotron",
+    )
+    return any(m in name for m in markers)
+
+
+def _rejects_sampling_params(model_name: str) -> bool:
+    """Return True for reasoning models that reject temperature/top_p.
+
+    Only some reasoning endpoints hard-reject sampling params (kimi-k3,
+    deepseek-r1, OpenAI o-series). Others (deepseek-v4.1-flash, gpt-oss, glm-5,
+    Nemotron) accept temperature alongside their reasoning control, so those
+    must NOT match here.
     """
     name = (model_name or "").lower()
     markers = (

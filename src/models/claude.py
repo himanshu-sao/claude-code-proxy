@@ -44,7 +44,14 @@ class ClaudeTool(BaseModel):
     input_schema: Dict[str, Any]
 
 class ClaudeThinkingConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    # Accept both the legacy shape ({"type": "enabled", "budget_tokens": N})
+    # and the newer adaptive shape ({"type": "adaptive"}). The proxy treats
+    # thinking purely as a signal today and never forwards the block upstream,
+    # so any extra fields are allowed and ignored.
+    type: Optional[str] = None
     enabled: bool = True
+    budget_tokens: Optional[int] = None
 
 class ClaudeMessagesRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -61,7 +68,9 @@ class ClaudeMessagesRequest(BaseModel):
     tools: Optional[List[ClaudeTool]] = None
     tool_choice: Optional[Dict[str, Any]] = None
     thinking: Optional[ClaudeThinkingConfig] = None
-    reasoning_effort: Optional[Literal["low", "medium", "high", "max"]] = None
+    # Claude Code 2.1.x sends xhigh for its top effort level; the proxy
+    # normalizes it to the canonical "max" in conversion/effort_mapper.py.
+    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh"]] = None
 
 class ClaudeTokenCountRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
