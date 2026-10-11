@@ -62,12 +62,17 @@ class EffortSpec:
 def normalize_effort(claude_value: Optional[str], config_override: Optional[str] = None) -> str:
     """Resolve the canonical effort level for a request.
 
-    Precedence: explicit config override > value Claude Code sent > default.
+    Precedence: the value Claude Code sent (from ``/effort``) > the
+    REASONING_EFFORT env default > the built-in default (``high``).
+
+    The env var is intentionally a *default*, not a hard override: in-session
+    ``/effort`` always wins so the level can be changed on the fly without
+    restarting the proxy.
 
     Claude Code's ``xhigh`` maps onto ``max`` here so the per-provider tables
     only ever see canonical values.
     """
-    raw = (config_override or claude_value or "").strip().lower()
+    raw = (claude_value or config_override or "").strip().lower()
     if not raw:
         return DEFAULT_EFFORT
 

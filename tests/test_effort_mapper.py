@@ -17,9 +17,15 @@ from src.conversion.effort_mapper import (
 
 # --- normalize_effort: precedence and canonicalization ---
 
-def test_normalize_prefers_config_override():
-    assert normalize_effort("low", "high") == "high"
+def test_normalize_prefers_client_value_over_env_default():
+    # The env var is a default only: in-session /effort always wins.
+    assert normalize_effort("low", "high") == "low"
+    assert normalize_effort("max", "low") == "max"
+
+
+def test_normalize_uses_env_default_when_client_silent():
     assert normalize_effort(None, "low") == "low"
+    assert normalize_effort("", "medium") == "medium"
 
 
 def test_normalize_uses_claude_value_when_no_override():

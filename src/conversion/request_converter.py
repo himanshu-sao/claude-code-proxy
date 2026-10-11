@@ -115,8 +115,9 @@ def convert_claude_to_openai(
     openai_request["max_tokens"] = clamped_max_tokens
 
     # Reasoning effort routing. normalize_effort resolves the canonical level
-    # (config override wins over the value Claude Code sent), and
-    # resolve_effort renders the provider-specific envelope: a top-level
+    # (the client's /effort value wins; REASONING_EFFORT env is a fallback
+    # default), and resolve_effort renders the provider-specific envelope: a
+    # top-level
     # reasoning_effort (string or numeric) for NIM GLM / gpt-oss / o-series /
     # deepseek, chat_template_kwargs for Nemotron, or nothing for always-on
     # thinking and non-reasoning models.
