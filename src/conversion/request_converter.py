@@ -20,9 +20,9 @@ def convert_claude_to_openai(
 ) -> Dict[str, Any]:
     """Convert Claude API request format to OpenAI format."""
 
-    # Map model. map_claude_model_to_openai returns a (model, tier) tuple; we
-    # only need the model name here (endpoints.py re-resolves the tier later).
-    openai_model, _tier = model_manager.map_claude_model_to_openai(claude_request.model)
+    # Map model. map_claude_model_to_openai returns a (model, tier) tuple; the
+    # middleware tier drives per-tier effort defaults (BIG/MIDDLE/SMALL_MODEL_EFFORT).
+    openai_model, model_tier = model_manager.map_claude_model_to_openai(claude_request.model)
 
     # Convert messages
     openai_messages = []
@@ -115,14 +115,15 @@ def convert_claude_to_openai(
     openai_request["max_tokens"] = clamped_max_tokens
 
     # Reasoning effort routing. normalize_effort resolves the canonical level
-    # (the client's /effort value wins; REASONING_EFFORT env is a fallback
-    # default), and resolve_effort renders the provider-specific envelope: a
-    # top-level
+    # (the client's /effort value wins; env defaults fall back in the order
+    # per-tier BIG/MIDDLE/SMALL_MODEL_EFFORT > global REASONING_EFFORT >
+    # built-in "high"), and resolve_effort renders the provider-specific
+    # envelope: a top-level
     # reasoning_effort (string or numeric) for NIM GLM / gpt-oss / o-series /
     # deepseek, chat_template_kwargs for Nemotron, or nothing for always-on
     # thinking and non-reasoning models.
     canonical = normalize_effort(
-        claude_request.reasoning_effort, config.reasoning_effort_override
+        claude_request.reasoning_effort, config.get_effort_default(model_tier)
     )
     if _is_reasoning_model(openai_model):
         spec = resolve_effort(openai_model, canonical)

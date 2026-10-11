@@ -124,3 +124,40 @@ def test_provider_effort_backwards_compat():
     assert provider_effort("z-ai/glm-5.3", "max") == "max"
     assert provider_effort("nvidia/nemotron-3-ultra-550b-a55b", "high") is None
     assert provider_effort("moonshotai/kimi-k2-thinking", "high") is None
+
+
+# --- Per-tier effort defaults (config.get_effort_default) ---
+# These exercise the env-var plumbing without the config singleton: the Config
+# class reads os.environ at construction, so we build a bare instance per test.
+
+
+def _fresh_config(monkeypatch, **env):
+    """Build a Config with only the given env vars set for effort."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    for var in ("REASONING_EFFORT", "BIG_MODEL_EFFORT", "MIDDLE_MODEL_EFFORT",
+                "SMALL_MODEL_EFFORT"):
+        monkeypatch.delenv(var, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    from src.core.config import Config
+    return Config()
+
+
+def test_per_tier_effort_beats_global(monkeypatch):
+    cfg = _fresh_config(monkeypatch, REASONING_EFFORT="high", SMALL_MODEL_EFFORT="low")
+    assert cfg.get_effort_default("small") == "low"
+    assert cfg.get_effort_default("big") == "high"    # falls back to global
+    assert cfg.get_effort_default("middle") == "high"
+
+
+def test_per_tier_effort_independent_and_case_insensitive(monkeypatch):
+    cfg = _fresh_config(monkeypatch, BIG_MODEL_EFFORT="max")
+    assert cfg.get_effort_default("BIG") == "max"      # tier lookup case-insensitive
+    assert cfg.get_effort_default("small") is None     # unset elsewhere -> None
+
+
+def test_per_tier_effort_none_when_unset(monkeypatch):
+    cfg = _fresh_config(monkeypatch)
+    assert cfg.get_effort_default("big") is None
+    assert cfg.get_effort_default("middle") is None
+    assert cfg.get_effort_default("small") is None

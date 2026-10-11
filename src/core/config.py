@@ -59,6 +59,14 @@ class Config:
         # Validated lazily by the effort mapper so a bad value degrades to the
         # built-in default instead of crashing the proxy at startup.
         self.reasoning_effort_override = os.environ.get("REASONING_EFFORT")
+
+        # Optional per-tier effort defaults (BIG_MODEL_EFFORT, etc.). When set,
+        # these take precedence over the global REASONING_EFFORT for that tier
+        # (but still lose to an explicit /effort). Each is independent: setting
+        # only SMALL_MODEL_EFFORT leaves big/middle on the global default.
+        self.big_model_effort = os.environ.get("BIG_MODEL_EFFORT")
+        self.middle_model_effort = os.environ.get("MIDDLE_MODEL_EFFORT")
+        self.small_model_effort = os.environ.get("SMALL_MODEL_EFFORT")
         
         # --- Multi-model support with fallback (comma-separated) ---
         # Each tier can have a list of models separated by commas.
@@ -110,6 +118,21 @@ class Config:
         # Background health checker task (started after event loop is running)
         self._health_check_task = None
         
+    def get_effort_default(self, tier: str):
+        """Resolve the env-configured default effort for a model tier.
+
+        Precedence: tier-specific (BIG/MIDDLE/SMALL_MODEL_EFFORT) > global
+        REASONING_EFFORT. Returns None when nothing is configured; the effort
+        mapper then uses its built-in default ("high"). An explicit /effort
+        from the client still overrides whatever this returns.
+        """
+        per_tier = {
+            "big": self.big_model_effort,
+            "middle": self.middle_model_effort,
+            "small": self.small_model_effort,
+        }.get((tier or "").lower())
+        return per_tier or self.reasoning_effort_override
+
     def validate_api_key(self):
         """Basic API key validation"""
         if not self.openai_api_key:
