@@ -294,57 +294,34 @@ async def test_connection():
 async def list_models():
     """List available models in Anthropic and OpenAI dual-compatible format.
 
-    Includes standard Claude model aliases so client discovery (Claude Desktop,
-    Claude Code, etc.) detects usable models, along with the active primaries
-    for each configured tier.
+    Exposes exactly one alias per tier (opus/sonnet/haiku). The alias the client
+    picks is irrelevant — model_manager routes it to the active model for that
+    tier, as configured via BIG/MIDDLE/SMALL_MODEL in .env.
     """
-    def _display_name(model_id: str) -> str:
-        """Derive a human-readable display name from a model ID.
+    now_ts = int(time.time())
+    now_iso = datetime.now().isoformat()
 
-        Strips trailing date suffixes (e.g. '-20241022') and converts
-        hyphens/underscores/slashes to spaces, then title-cases the result.
-        """
-        import re
-        name = model_id.split("/")[-1]               # drop org prefix, e.g. openai/gpt-4o -> gpt-4o
-        name = re.sub(r"-\d{8}$", "", name)          # strip date suffix, e.g. -20241022
-        name = name.replace("-", " ").replace("_", " ")
-        return name.title()
-
+    # One representative per tier; .env tier mapping resolves the real model.
     claude_models = [
         {
-            "id": "claude-3-7-sonnet-20250219",
-            "display_name": "Claude 3.7 Sonnet",
-            "created_at": "2025-02-19T00:00:00Z",
-            "created": 1740000000,
+            "id": "claude-3-opus-20240229",
+            "display_name": "Opus (big tier)",
+            "created_at": "2024-02-29T00:00:00Z",
+            "created": 1709164800,
         },
         {
             "id": "claude-3-5-sonnet-20241022",
-            "display_name": "Claude 3.5 Sonnet",
+            "display_name": "Sonnet (middle tier)",
             "created_at": "2024-10-22T00:00:00Z",
             "created": 1729555200,
         },
         {
             "id": "claude-3-5-haiku-20241022",
-            "display_name": "Claude 3.5 Haiku",
+            "display_name": "Haiku (small tier)",
             "created_at": "2024-10-22T00:00:00Z",
             "created": 1729555200,
         },
-        {
-            "id": "claude-3-opus-20240229",
-            "display_name": "Claude 3 Opus",
-            "created_at": "2024-02-29T00:00:00Z",
-            "created": 1709164800,
-        },
-        {
-            "id": "claude-3-haiku-20240307",
-            "display_name": "Claude 3 Haiku",
-            "created_at": "2024-03-07T00:00:00Z",
-            "created": 1709769600,
-        },
     ]
-
-    now_ts = int(time.time())
-    now_iso = datetime.now().isoformat()
 
     data = [
         {
@@ -358,20 +335,6 @@ async def list_models():
         }
         for m in claude_models
     ]
-
-    seen = {m["id"] for m in claude_models}
-    for model_name in [config.big_model, config.middle_model, config.small_model]:
-        if model_name and model_name not in seen:
-            seen.add(model_name)
-            data.append({
-                "id": model_name,
-                "type": "model",
-                "object": "model",
-                "display_name": _display_name(model_name),
-                "created_at": now_iso,
-                "created": now_ts,
-                "owned_by": "claude-code-proxy",
-            })
 
     return {
         "object": "list",
