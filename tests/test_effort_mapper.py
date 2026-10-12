@@ -3,7 +3,7 @@
 These cover the canonical normalization (including Claude Code's xhigh -> max)
 and the per-provider envelope/vocabulary mapping for every model family the
 proxy targets: NIM GLM-5.x, gpt-oss / o-series, kimi-k3 / deepseek-r1,
-deepseek-v4.1-flash (numeric), and NVIDIA Nemotron (chat_template_kwargs).
+deepseek-v4.1-flash (low/high strings), and NVIDIA Nemotron (chat_template_kwargs).
 """
 from src.conversion.effort_mapper import (
     CANONICAL_EFFORTS,
@@ -77,12 +77,14 @@ def test_gpt_oss_vocabulary():
     assert resolve_effort("openai/gpt-oss-120b", "max").reasoning_effort == "high"
 
 
-def test_deepseek_v4_numeric():
-    # deepseek-v4.1-flash takes a numeric reasoning_effort 1-100.
-    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "low").reasoning_effort == 20
-    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "medium").reasoning_effort == 50
-    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "high").reasoning_effort == 80
-    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "max").reasoning_effort == 100
+def test_deepseek_v4_string():
+    # deepseek-v4.1-flash moved off the numeric 1-100 scale (NIM rejected
+    # integers with "expected string or map" as of 2026-10-11); live tests
+    # show "medium" is also rejected in-stream, so it is nudged to high.
+    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "low").reasoning_effort == "low"
+    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "medium").reasoning_effort == "high"
+    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "high").reasoning_effort == "high"
+    assert resolve_effort("deepseek-ai/deepseek-v4.1-flash", "max").reasoning_effort == "high"
 
 
 def test_nemotron_template_kwargs():

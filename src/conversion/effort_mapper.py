@@ -6,7 +6,8 @@ each OpenAI-compatible upstream speaks its own envelope and vocabulary:
 * NVIDIA NIM GLM-5.x: top-level ``reasoning_effort`` string ``low|high|max``.
 * gpt-oss / o-series / kimi-k3 / deepseek-r1: top-level ``reasoning_effort``
   string ``low|medium|high``.
-* deepseek-v4.1-flash: top-level ``reasoning_effort`` *numeric* 1-100.
+* deepseek-v4.1-flash: top-level ``reasoning_effort`` string ``low|high``
+  (``medium`` rejected in-stream; nudged up to ``high``).
 * NVIDIA Nemotron families: no ``reasoning_effort`` at all — reasoning is
   toggled via ``chat_template_kwargs: {enable_thinking, medium_effort}``.
 * Always-on thinking models (kimi-k2-thinking, qwen3-*-thinking) and plain
@@ -89,9 +90,11 @@ def normalize_effort(claude_value: Optional[str], config_override: Optional[str]
     return DEFAULT_EFFORT
 
 
-# Numeric effort scale for deepseek-v4.1-flash (1-100). Chosen to spread the
-# canonical levels across the model's full range with sensible headroom.
-_DEEPSEEK_NUMERIC = {"low": 20, "medium": 50, "high": 80, "max": 100}
+# deepseek-v4.1-flash originally accepted a numeric reasoning_effort (1-100),
+# but the NIM endpoint changed contract on 2026-10-11 to expect a string or
+# map (numeric values are rejected with "invalid type: integer ... expected
+# string or map"). Live-verified string vocabulary: "high" and "low" are
+# accepted; "medium" is rejected in-stream with a 400.
 
 
 def resolve_effort(model_name: str, canonical: str) -> EffortSpec:
@@ -117,10 +120,14 @@ def resolve_effort(model_name: str, canonical: str) -> EffortSpec:
             kwargs["medium_effort"] = True
         return EffortSpec(chat_template_kwargs=kwargs)
 
-    # deepseek-v4.1-flash: numeric reasoning_effort 1-100, top-level. Note this
-    # model accepts temperature alongside (it is sent separately by the caller).
+    # deepseek-v4.1-flash: string reasoning_effort, top-level (the endpoint
+    # moved off the numeric 1-100 scale on 2026-10-11; integers now 400 with
+    # "expected string or map"). Live-verified vocabulary: "medium" is
+    # rejected in-stream, so nudge it up to high. Accepts temperature.
     if "deepseek-v4" in name:
-        return EffortSpec(reasoning_effort=_DEEPSEEK_NUMERIC.get(canonical, 80))
+        if canonical in ("medium", "max"):
+            return EffortSpec(reasoning_effort="high")
+        return EffortSpec(reasoning_effort=canonical)
 
     # NVIDIA NIM GLM-5.x family: low|high|max, no "medium". Nudge medium up to
     # high — for a coding assistant a weak answer is worse than a slower one.

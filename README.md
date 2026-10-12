@@ -9,7 +9,7 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 - **Full Claude API Compatibility**: Complete `/v1/messages` endpoint support
 - **Multiple Provider Support**: OpenAI, Azure OpenAI, local models (Ollama), and any OpenAI-compatible API
 - **Smart Model Mapping**: Configure BIG / MIDDLE / SMALL models via environment variables, with per-tier fallback lists and automatic health-driven failover
-- **Reasoning Effort Control**: Honors Claude Code's `/effort` levels (low/medium/high/xhigh/max) and maps them to each upstream's native API (top-level, numeric, or chat-template-kwargs depending on the model)
+- **Reasoning Effort Control**: Honors Claude Code's `/effort` levels (low/medium/high/xhigh/max) and maps them to each upstream's native API (top-level string or chat-template-kwargs depending on the model)
 - **Function Calling**: Complete tool use support with proper conversion
 - **Streaming Responses**: Real-time SSE streaming support
 - **Image Support**: Base64 encoded image input
@@ -85,7 +85,7 @@ Models are mapped by tier. Each tier accepts a comma-separated list — the firs
 
 **Reasoning Effort:**
 
-Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow through to the upstream. The proxy normalizes them (`xhigh` and `max` both map to the canonical `max`) and translates to each model's native vocabulary — e.g. GLM-5.x gets `low/high/max`, gpt-oss gets `low/medium/high`, deepseek-v4.x gets a numeric 1–100, and Nemotron models get `chat_template_kwargs` thinking switches. Defaults, applied when the client sends no effort:
+Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow through to the upstream. The proxy normalizes them (`xhigh` and `max` both map to the canonical `max`) and translates to each model's native vocabulary — e.g. GLM-5.x gets `low/high/max`, gpt-oss and deepseek-v4.x get `low/medium/high`, and Nemotron models get `chat_template_kwargs` thinking switches. Defaults, applied when the client sends no effort:
 
 - `BIG_MODEL_EFFORT`, `MIDDLE_MODEL_EFFORT`, `SMALL_MODEL_EFFORT` - Per-tier default effort (`low|medium|high|max|xhigh`). An in-session `/effort` always overrides these.
 - `REASONING_EFFORT` - Global default effort for all tiers when a per-tier value is not set (built-in fallback: `high`).
@@ -267,10 +267,12 @@ In Claude Code 2.1.x, use `/effort low|medium|high|xhigh` to change it on the fl
 
 | `/effort` | GLM-5.x (`z-ai/glm-5.3`) | gpt-oss (`openai/gpt-oss-*`) | deepseek-v4.1-flash | Nemotron (`nvidia/nemotron-*`) | kimi-k2-thinking / qwen3-*-thinking |
 |---|---|---|---|---|---|
-| `low` | `low` | `low` | `20` | thinking **off** | *(omitted)* |
-| `medium` | `high` | `medium` | `50` | thinking on, `medium_effort` | *(omitted)* |
-| `high` | `high` | `high` | `80` | thinking on, `medium_effort` | *(omitted)* |
-| `xhigh` | **`max`** | `high` (cap) | `100` | thinking on (full) | *(omitted)* |
+| `low` | `low` | `low` | `low` | thinking **off** | *(omitted)* |
+| `medium` | `high` | `medium` | `high` | thinking on, `medium_effort` | *(omitted)* |
+| `high` | `high` | `high` | `high` | thinking on, `medium_effort` | *(omitted)* |
+| `xhigh` | **`max`** | `high` (cap) | `high` (cap) | thinking on (full) | *(omitted)* |
+
+NVIDIA NIM's deepseek-v4.1-flash changed its effort contract on 2026-10-11: it previously took a numeric 1–100 value, then started rejecting integers ("expected string or map") and also rejects `"medium"` in-stream. The table reflects the live-verified string vocabulary.
 
 Notes:
 
