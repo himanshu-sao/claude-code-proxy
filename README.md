@@ -9,7 +9,7 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 - **Full Claude API Compatibility**: Complete `/v1/messages` endpoint support
 - **Multiple Provider Support**: OpenAI, Azure OpenAI, local models (Ollama), and any OpenAI-compatible API
 - **Smart Model Mapping**: Configure BIG / MIDDLE / SMALL models via environment variables, with per-tier fallback lists and automatic health-driven failover
-- **Reasoning Effort Control**: Honors Claude Code's `/effort` levels (low/medium/high/xhigh) and maps them to each upstream's native API (top-level, numeric, or chat-template-kwargs depending on the model)
+- **Reasoning Effort Control**: Honors Claude Code's `/effort` levels (low/medium/high/xhigh/max) and maps them to each upstream's native API (top-level, numeric, or chat-template-kwargs depending on the model)
 - **Function Calling**: Complete tool use support with proper conversion
 - **Streaming Responses**: Real-time SSE streaming support
 - **Image Support**: Base64 encoded image input
@@ -85,7 +85,7 @@ Models are mapped by tier. Each tier accepts a comma-separated list — the firs
 
 **Reasoning Effort:**
 
-Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`) flow through to the upstream. The proxy normalizes them and translates to each model's native vocabulary — e.g. GLM-5.x gets `low/high/max`, gpt-oss gets `low/medium/high`, deepseek-v4.x gets a numeric 1–100, and Nemotron models get `chat_template_kwargs` thinking switches. Defaults, applied when the client sends no effort:
+Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow through to the upstream. The proxy normalizes them (`xhigh` and `max` both map to the canonical `max`) and translates to each model's native vocabulary — e.g. GLM-5.x gets `low/high/max`, gpt-oss gets `low/medium/high`, deepseek-v4.x gets a numeric 1–100, and Nemotron models get `chat_template_kwargs` thinking switches. Defaults, applied when the client sends no effort:
 
 - `BIG_MODEL_EFFORT`, `MIDDLE_MODEL_EFFORT`, `SMALL_MODEL_EFFORT` - Per-tier default effort (`low|medium|high|max|xhigh`). An in-session `/effort` always overrides these.
 - `REASONING_EFFORT` - Global default effort for all tiers when a per-tier value is not set (built-in fallback: `high`).
@@ -99,6 +99,7 @@ Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`) flow through t
 **API Configuration:**
 
 - `OPENAI_BASE_URL` - API base URL (default: `https://api.openai.com/v1`)
+- `AZURE_API_VERSION` - Azure OpenAI API version (e.g. `2024-03-01-preview`); see the Azure provider example below
 
 **Server Settings:**
 
@@ -274,6 +275,7 @@ In Claude Code 2.1.x, use `/effort low|medium|high|xhigh` to change it on the fl
 Notes:
 
 - In-session `/effort` always wins over the proxy env vars.
+- A `max` level maps to the same canonical value as `xhigh`, so its upstream translation is identical to the `xhigh` row.
 - The env defaults are independent per tier — a common pattern is `SMALL_MODEL_EFFORT=low` (cheap haiku with thinking off) while leaving `BIG_MODEL` at the built-in `high`.
 - `kimi-k2-thinking` / `qwen3-*-thinking` are always-on reasoning models: the proxy sends no reasoning parameter to them (their chat template forces a thinking trace).
 
@@ -283,7 +285,7 @@ Notes:
 | ----------------------------------- | ---------------------------------------- |
 | `POST /v1/messages`                 | Main messages endpoint (Claude schema)   |
 | `POST /v1/messages/count_tokens`    | Token-count endpoint (Anthropic format)  |
-| `GET  /v1/models`                   | Models list (Claude aliases + active tiers) |
+| `GET  /v1/models`                   | Models list (one Claude alias per tier)    |
 | `GET  /health`                      | Health + per-key RPM usage/penalties     |
 | `GET  /test-connection`             | Liveness: probes upstream with a 5-token completion |
 | `GET/HEAD /api/hello` and `/hello`  | Tiny probe for Claude extensions         |
@@ -326,12 +328,24 @@ uv run mypy src/
 ```
 claude-code-proxy/
 ├── src/
-│   ├── main.py                     # Main server
-│   ├── test_claude_to_openai.py    # Tests
-│   └── [other modules...]
-├── start_proxy.py                  # Startup script
-├── .env.example                    # Config template
-└── README.md                       # This file
+│   ├── main.py                  # Server entrypoint
+│   ├── api/endpoints.py         # FastAPI routes (/v1/messages, /v1/models, /health, ...)
+│   ├── conversion/
+│   │   ├── request_converter.py   # Claude request -> OpenAI request
+│   │   ├── response_converter.py  # OpenAI response -> Claude response
+│   │   └── effort_mapper.py       # Reasoning-effort translation per model family
+│   ├── core/
+│   │   ├── client.py              # Async upstream client with multi-key RPM + retries
+│   │   ├── config.py              # Env-var configuration
+│   │   ├── model_manager.py       # Tier mapping + fallback/health failover
+│   │   ├── context_manager.py     # Context-window truncation
+│   │   └── provider_discovery.py  # Upstream provider detection
+│   └── models/                    # Pydantic schemas (Claude + OpenAI)
+├── tests/                       # Unit tests (pytest)
+├── scripts/                     # Live/verification scripts (need running proxy or real keys)
+├── start_proxy.py               # Startup script
+├── .env.example                 # Config template
+└── README.md                    # This file
 ```
 
 ## Performance

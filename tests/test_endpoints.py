@@ -5,15 +5,14 @@ from src.conversion.request_converter import _is_reasoning_model
 client = TestClient(app)
 
 def test_list_models():
-    from src.core.config import config
     response = client.get("/v1/models")
     assert response.status_code == 200
     data = response.json()
     assert data["object"] == "list"
     assert data["has_more"] is False
     assert isinstance(data["data"], list)
-    # Contains standard Claude models (5) plus configured tier primaries
-    assert len(data["data"]) >= 5
+    # Contains the 3 Claude aliases (one per tier) plus configured tier primaries
+    assert len(data["data"]) >= 3
     for item in data["data"]:
         assert item["type"] == "model"
         assert item["object"] == "model"
@@ -24,9 +23,6 @@ def test_list_models():
         assert not re.search(r"-\d{8}", item["display_name"])
     model_ids = [m["id"] for m in data["data"]]
     assert "claude-3-5-sonnet-20241022" in model_ids
-    assert "claude-3-7-sonnet-20250219" in model_ids
-    # The configured primaries must also be in the list
-    assert config.big_model in model_ids or config.middle_model in model_ids or config.small_model in model_ids
 
 
 

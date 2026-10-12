@@ -31,8 +31,8 @@ uv add --dev pyinstaller
 ### 1. Directory Version Packaging (Recommended for development/testing)
 
 ```bash
-# Use custom spec file
-uv run pyinstaller claude-proxy.spec
+# Generates build/ and dist/, with a spec file you can customize
+uv run pyinstaller --name claude-code-proxy src/main.py
 ```
 
 ### 2. Single-file Version Packaging (Recommended for deployment)
@@ -54,19 +54,21 @@ uv run pyinstaller --onefile --add-data="src:src" src/main.py
 
 ## PyInstaller Configuration Details
 
-### claude-proxy.spec Configuration
+### Spec File Configuration
+
+If you keep the generated spec file (`claude-code-proxy.spec`), these are the settings that matter:
 
 ```python
-# Main configuration items explanation
 a = Analysis(
     ['src/main.py'],           # Entry file
     pathex=['.'],              # Search path
     binaries=[],               # Binary files
-    datas=[('src', 'src')],    # Data files
+    datas=[],                  # Data files (none needed)
     hiddenimports=[...],       # Hidden import modules
 )
 
-# Key hidden imports included
+# Hidden imports PyInstaller's static analysis can miss (add if you hit
+# ModuleNotFoundError at runtime)
 hiddenimports=[
     'src.api.endpoints',
     'src.core.config',
@@ -196,9 +198,10 @@ systemctl enable claude-proxy
 
 ### Docker Container Deployment
 
+PyInstaller binaries are linked against glibc, so use a glibc-based base image (Alpine's musl will not run them):
+
 ```dockerfile
-FROM alpine:latest
-RUN apk add --no-cache libstdc++
+FROM debian:bookworm-slim
 COPY claude-code-proxy-single /usr/local/bin/claude-code-proxy
 EXPOSE 8082
 CMD ["claude-code-proxy"]
@@ -349,5 +352,4 @@ If you encounter issues, please check:
 
 ---
 
-_Last updated: August 22, 2024_
-_PyInstaller version: 6.15.0_
+_Last updated: October 11, 2026_
