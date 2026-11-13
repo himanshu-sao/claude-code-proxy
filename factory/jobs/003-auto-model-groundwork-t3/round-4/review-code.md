@@ -1,0 +1,27 @@
+VERDICT: PASS
+
+- Read order, `src/core/signal_log.py:288-292`: `_get(request, "output_config")` runs first and falls back to `model_extra` only when the result is `None`. I checked this directly on a T2-shaped subclass.
+  - Declared `{"effort": "low"}` beats an extra `{"effort": "max"}`.
+  - A declared `None` does not hide an extra.
+  - The corner where the attribute is a non-None non-dict (`"high"`) while `model_extra` holds a dict gives `oc_effort=None`. The declared value wins, then the dict check rejects it, so the extra is not consulted.
+  - This is consistent with "declared wins". It cannot happen with real pydantic input, because a declared key never lands in `model_extra`. It is not covered by a test, and that is acceptable. The dict check, name filter, enum filter and `_names` cap are unchanged.
+- Tests, `tests/test_signal_log.py:42-64`: the `req_cls` fixture is parametrized as `extra` and `declared`.
+  - `_DeclaredOutputConfigRequest` adds exactly `output_config: Optional[Any] = None` and inherits `extra="allow"`. That matches T2's `src/models/claude.py:99` on `factory/003-auto-model-groundwork-t2`. T2's other change, widening the `reasoning_effort` Literal, is not simulated, and no assertion needs it.
+  - The three formerly failing tests take `req_cls` and are not copied.
+  - Against the OLD `signal_log.py` from 1a8143b, run in a scratch copy under `$TMPDIR` (the worktree was not touched), 5 tests fail:
+    - `test_sentinels_never_appear_and_fields_are_correct[declared]`
+    - `test_enum_values_are_logged_when_known[declared]`
+    - `test_hostile_names_are_logged_as_other[declared]`
+    - `test_output_config_effort_kept_or_other[declared]`
+    - `test_declared_output_config_wins_over_extra_and_none_does_not_hide_it`
+  - All `[extra]` variants pass on the old code, so the tests discriminate the shapes.
+  - A first scratch run showed 13 failures. Eight were analyzer tests failing only because I had not copied `scripts/` into the scratch dir. After I copied it, 5 failed, as listed above.
+- `body_fields`, `signal_log.py:260-264`: names come from `model_fields_set` plus `model_extra` keys. A declared `output_config` appears when it is sent, including an explicit null, which is the same as when it was an extra. It is absent when not sent. This is deliberate and tested by `test_output_config_field_names_appear_in_body_fields[extra|declared]` (`tests/test_signal_log.py:~935`). No source change was needed for it.
+- Verification and scope:
+  - `build.md` line 1 is `STATUS: GREEN`.
+  - `import src` resolves inside the worktree.
+  - Offline subset plus `tests/test_signal_log.py`: 101 passed.
+  - black and isort `--check` at line length 100 are clean.
+  - `git diff 1a8143b HEAD` touches only `signal_log.py` (+5/-1), `tests/test_signal_log.py` and `build.md`. `claude.py`, `endpoints.py`, `config.py`, `board.json` and `scripts/` are untouched.
+  - No other `model_extra` lookups exist, and `reasoning_effort` is read via the attribute.
+- Minor, not blocking: the "Rework round 3" section in `build.md` says `body_fields` is covered "either way" and names the test. That is accurate. No docs sync is needed, because this is an internal log field read with no new env var or user-facing change.
