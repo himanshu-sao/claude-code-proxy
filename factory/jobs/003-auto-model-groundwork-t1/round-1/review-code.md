@@ -1,0 +1,22 @@
+VERDICT: PASS
+
+Tests run in the worktree: `src.__file__` resolves inside `.claude/worktrees/003-t1`. The offline subset (effort_mapper, endpoints, context_manager, model_manager) gives 81 passed. `black --check src/ tests/test_model_manager.py tests/test_endpoints.py` and `isort --check src/` are clean.
+
+Acceptance criteria
+- AC1 holds. `model_manager.py:8-12` and `:24-25` run the auto check first, with strip and lowercase. `test_default_alias_case_and_whitespace` covers all three spellings.
+- AC2 holds in code and is only partly covered by tests. The empty or whitespace alias fallback is `config.py:87-89`, and `my-opus-auto` is tested in `test_custom_alias_replaces_default`. No automated test builds a `Config` with `AUTO_MODEL_ALIAS=""` or whitespace. Only the manual check in build.md covers it. This is non-blocking, and `tests/test_effort_mapper.py:150` shows a `Config()` can be constructed if someone wants to add one.
+- AC3 holds. `gpt-`, `deepseek-`, `o1-`, `ep-` and `sonnet-` aliases hit the auto branch before the pass-through and substring rules. The disabled `gpt-auto` case correctly reverts to pass-through.
+- AC4 holds. Only an early return was added, and the other branches are byte-identical in the diff. `test_existing_mappings_unchanged` also asserts `is_auto_alias` is false for each.
+- AC5 holds (`test_alias_follows_big_fallback`, via `get_active_model("big")`).
+- AC6 holds. The alias is appended last (`endpoints.py:346-354`), with the fixed `created_at` and `created` values. `display_name` has no `-\d{8}`, and `owned_by` comes from the existing comprehension. `test_list_models` is untouched.
+- AC7 holds. `parse_auto_enabled` (`config.py:14-18`) returns true for None, and false for `false`, `0`, `no`, `off`, `""` and whitespace after strip and lowercase. Disabled hides the alias from `/v1/models`, makes `is_auto_alias` false, and falls through to the unknown-name BIG path.
+- AC8 holds. `endpoints.py:96-103` extends the existing `logger.info` call, and no new log call was added. The caplog tests assert `len(lines) == 1` on lines containing `reason=`, so a duplicate line would fail them. They only pass because the request logger propagates to root, which the `propagate_logs` fixture relies on. They would fail without the change, since `reason=` does not exist before it.
+- AC9 holds. Both echo tests check the exact `Claude-Proxy-Auto` string. The streaming test parses the real `message_start` SSE event. The `_write_last_model` call is checked as exactly one `("big", <active big>)` tuple. The echo assertions are regression guards, because `response_converter.py` already uses `original_request.model`. They would pass without the change, but they are real checks rather than vacuous ones.
+- AC10 holds as run above.
+
+Notes (none blocking)
+- Empty `AUTO_MODEL_ENABLED` means disabled. This is consistent across the spec, `config.py:14-18`, and the `""` and `"  "` cases in `test_parse_auto_enabled_false_values`. build.md "Deviations and notes" flags it for the docs task. The docs task (README, `.env.example`, QUICKSTART) must state it explicitly. `AUTO_MODEL_ENABLED=` left blank in `.env` silently disables the alias.
+- Some endpoint tests depend on the process environment. They compare against `_config.auto_model_alias` but also assert `len(data) == 4`, and `test_auto_alias_request_log_and_last_model` posts a hardcoded `Claude-Proxy-Auto`. They would fail if `AUTO_MODEL_ENABLED` or `AUTO_MODEL_ALIAS` were set in a developer's `.env`. `.env` currently has no `AUTO_*` keys. If this ever bites, add `monkeypatch.setattr` for both attributes in those tests.
+- `tests/test_endpoints.py:54-66` puts imports mid-file with `# noqa: E402`. It works, and it is only a cosmetic deviation from the top-of-file import convention.
+- The `endpoints.py` edits are small and localized: one extra `%s` and argument in the existing log call (`:96-103`), the `list_models` block and docstring (`:312-354`). `create_message` is otherwise untouched, including the duplicate mapping at `:113` and the `_write_last_model` block. T5 can edit around this without conflict. T5 should replace the `"auto-placeholder"` / `"tier-map"` ternary at `:102` rather than add a second log line.
+- Python 3.9 safety is fine. No `X | Y` unions or `match` were added. `tuple[str, str]` was already in the file and is valid on 3.9. The new helper `parse_auto_enabled(raw)` has no parameter annotation, which is harmless.

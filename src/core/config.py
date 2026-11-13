@@ -8,6 +8,15 @@ import time
 
 _log = logging.getLogger("config")
 
+DEFAULT_AUTO_MODEL_ALIAS = "claude-proxy-auto"
+
+
+def parse_auto_enabled(raw) -> bool:
+    """Parse AUTO_MODEL_ENABLED. Unset (None) is true; false/0/no/off/empty is false."""
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("false", "0", "no", "off", "")
+
 
 # Configuration
 class Config:
@@ -70,6 +79,15 @@ class Config:
         self.big_model_effort = os.environ.get("BIG_MODEL_EFFORT")
         self.middle_model_effort = os.environ.get("MIDDLE_MODEL_EFFORT")
         self.small_model_effort = os.environ.get("SMALL_MODEL_EFFORT")
+
+        # Virtual "auto" model alias. Matched exactly (case-insensitive, whitespace-stripped)
+        # and mapped to the active BIG model. Empty/unset means the default alias. The
+        # original casing is kept for the /v1/models id. AUTO_MODEL_ENABLED=false removes
+        # the /v1/models entry and makes the alias behave like any unknown name.
+        self.auto_model_alias = (
+            os.environ.get("AUTO_MODEL_ALIAS", "").strip() or DEFAULT_AUTO_MODEL_ALIAS
+        )
+        self.auto_model_enabled = parse_auto_enabled(os.environ.get("AUTO_MODEL_ENABLED"))
 
         # --- Multi-model support with fallback (comma-separated) ---
         # Each tier can have a list of models separated by commas.

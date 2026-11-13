@@ -93,12 +93,13 @@ async def create_message(
 
         # Log incoming request with model info
         logger.info(
-            "Request [%s] model=%s -> %s (tier=%s, stream=%s)",
+            "Request [%s] model=%s -> %s (tier=%s, stream=%s, reason=%s)",
             request_id[:8],
             request.model,
             openai_model,
             model_tier,
             request.stream,
+            "auto-placeholder" if model_manager.is_auto_alias(request.model) else "tier-map",
         )
 
         # Convert Claude request to OpenAI format
@@ -311,9 +312,11 @@ async def test_connection():
 async def list_models():
     """List available models in Anthropic and OpenAI dual-compatible format.
 
-    Exposes exactly one alias per tier (opus/sonnet/haiku). The alias the client
-    picks is irrelevant — model_manager routes it to the active model for that
-    tier, as configured via BIG/MIDDLE/SMALL_MODEL in .env.
+    Exposes one alias per tier (opus/sonnet/haiku), plus an optional virtual auto
+    alias (AUTO_MODEL_ALIAS) unless AUTO_MODEL_ENABLED is false. The alias the client
+    picks is irrelevant for the tier aliases — model_manager routes it to the active
+    model for that tier, as configured via BIG/MIDDLE/SMALL_MODEL in .env. The auto
+    alias currently resolves to the BIG tier.
     """
     now_ts = int(time.time())
     now_iso = datetime.now().isoformat()
@@ -339,6 +342,16 @@ async def list_models():
             "created": 1729555200,
         },
     ]
+
+    if config.auto_model_enabled:
+        claude_models.append(
+            {
+                "id": config.auto_model_alias,
+                "display_name": "Auto (routes to big tier)",
+                "created_at": "2025-01-01T00:00:00Z",
+                "created": 1735689600,
+            }
+        )
 
     data = [
         {
