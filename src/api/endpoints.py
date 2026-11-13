@@ -12,6 +12,7 @@ from src.conversion.response_converter import (
     convert_openai_streaming_to_claude_with_cancellation,
     convert_openai_to_claude_response,
 )
+from src.core import signal_log
 from src.core.client import OpenAIClient
 from src.core.config import config
 from src.core.logging import logger
@@ -48,6 +49,20 @@ def _write_last_model(tier: str, model: str) -> None:
         os.replace(tmp_path, _last_model_path)
     except Exception as exc:  # noqa: BLE001 — status file must never break a request
         logger.debug("Failed to write .last_model: %s", exc)
+
+
+def _emit_signal_safe(request: ClaudeMessagesRequest, http_request: Request) -> None:
+    """Append the content-free signal record; nothing here may reach the response.
+
+    emit_signal swallows its own failures, but its arguments are evaluated before it is
+    entered, so they are evaluated inside this guard too. No-op unless AUTO_SIGNAL_LOG is on.
+    """
+    try:
+        signal_log.emit_signal(
+            request, http_request.headers, model_manager.is_auto_alias(request.model)
+        )
+    except Exception as exc:  # noqa: BLE001 — the signal log must never break a request
+        logger.debug("signal log skipped: %s", type(exc).__name__)
 
 
 # Global client for compatibility; each request may obtain a fresh client via config.
@@ -101,6 +116,10 @@ async def create_message(
             request.stream,
             "auto-placeholder" if model_manager.is_auto_alias(request.model) else "tier-map",
         )
+
+        # Content-free signal record (opt-in via AUTO_SIGNAL_LOG). Called once, above the
+        # stream/non-stream split; runs inline because it is a no-op unless enabled.
+        _emit_signal_safe(request, http_request)
 
         # Convert Claude request to OpenAI format
         openai_request = convert_claude_to_openai(request, model_manager)
