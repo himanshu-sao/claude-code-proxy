@@ -1,7 +1,11 @@
 """Tests for context_manager: model limits lookup and message trimming."""
 
+import json
+from pathlib import Path
+
 import pytest
 
+from src.core import context_manager
 from src.core.context_manager import (
     estimate_tokens,
     get_model_limits,
@@ -44,6 +48,62 @@ class TestGetModelLimits:
     def test_gpt_oss(self):
         ctx, _ = get_model_limits("openai/gpt-oss-20b")
         assert ctx in (128_000, 131_072)
+
+
+_REPO_CACHE = Path(__file__).resolve().parent.parent / "model_contexts_cache.json"
+_MISTRAL_LARGE = "mistralai/mistral-large-4-1t-a52b"
+_MINIMAX_FLASH = "minimaxai/minimax-m3.1-flash"
+_NIM_TARGETS = (_MISTRAL_LARGE, _MINIMAX_FLASH)
+_SAFE_DEFAULT = (32_000, 4_096)
+
+
+def _load_repo_cache() -> dict:
+    """Read the tracked cache file with the same filter as provider_discovery."""
+    with open(_REPO_CACHE, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    return {k: (v[0], v[1]) for k, v in raw.items() if isinstance(v, list) and len(v) == 2}
+
+
+class TestCachedNimLimits:
+    """Context data for the two MIDDLE_MODEL ids, read from the real repo cache file.
+
+    Never calls run_discovery_and_patch (CWD-dependent, may hit the network, rewrites the cache).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _loaded_cache(self, monkeypatch):
+        monkeypatch.setattr(context_manager, "_DISCOVERED_LIMITS", _load_repo_cache())
+        # src/__init__ runs load_dotenv(override=True): keep a developer's .env out of the test.
+        monkeypatch.setattr(context_manager, "_ENV_OVERRIDES", {})
+
+    def test_cache_file_has_both_ids(self):
+        cache = _load_repo_cache()
+        for model_id in _NIM_TARGETS:
+            assert cache[model_id] == (262144, 32768)
+
+    @pytest.mark.parametrize("model_id", _NIM_TARGETS)
+    def test_exact_lookup(self, model_id):
+        limits = get_model_limits(model_id)
+        assert limits == (262144, 32768)
+        assert limits != _SAFE_DEFAULT
+
+    @pytest.mark.parametrize("model_id", _NIM_TARGETS)
+    def test_no_neighbour_shadowing(self, monkeypatch, model_id):
+        # Move the two targets to the END so every neighbour is tried first by the substring
+        # loop, and query upper-cased so the case-sensitive exact-key check cannot short-circuit.
+        cache = _load_repo_cache()
+        reordered = {k: v for k, v in cache.items() if k not in _NIM_TARGETS}
+        for target in _NIM_TARGETS:
+            reordered[target] = cache[target]
+        monkeypatch.setattr(context_manager, "_DISCOVERED_LIMITS", reordered)
+
+        assert get_model_limits(model_id.upper()) == (262144, 32768)
+        assert get_model_limits("mistralai/mistral-nemotron") == (128_000, 16_384)
+
+    def test_env_override_still_wins(self, monkeypatch):
+        monkeypatch.setattr(context_manager, "_ENV_OVERRIDES", {"mistral-large-4": (1_000, 100)})
+        assert get_model_limits(_MISTRAL_LARGE) == (1_000, 100)
+        assert get_model_limits(_MINIMAX_FLASH) == (262144, 32768)
 
 
 class TestEstimateTokens:
