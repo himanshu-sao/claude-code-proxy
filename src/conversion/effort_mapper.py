@@ -28,6 +28,10 @@ CANONICAL_EFFORTS = ("low", "medium", "high", "max")
 
 DEFAULT_EFFORT = "high"
 
+# Everything a client may send for effort; "xhigh" is mapped to "max" later by
+# normalize_effort.
+CLIENT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
 
 class EffortSpec:
     """The resolved reasoning configuration to apply to an OpenAI request.
@@ -59,6 +63,29 @@ class EffortSpec:
             f"EffortSpec(reasoning_effort={self.reasoning_effort!r}, "
             f"chat_template_kwargs={self.chat_template_kwargs!r})"
         )
+
+
+def resolve_client_effort(reasoning_effort: Any, output_config: Any) -> Optional[str]:
+    """Pick the effort level the client sent, from either carrier field.
+
+    Precedence: top-level ``reasoning_effort`` > ``output_config.effort``.
+    A malformed ``output_config`` (not a dict, ``effort`` not a string, or an
+    unknown level) is treated as absent so the env defaults still apply and the
+    request is never rejected. The unknown-level filter matters: left to
+    ``normalize_effort``, ``"bogus"`` would fall back to ``high`` and silently
+    bypass the env default.
+
+    Returns a lowercase level from ``CLIENT_EFFORTS`` or ``None``.
+    """
+    if reasoning_effort:
+        return reasoning_effort
+    if not isinstance(output_config, dict):
+        return None
+    effort = output_config.get("effort")
+    if not isinstance(effort, str):
+        return None
+    effort = effort.strip().lower()
+    return effort if effort in CLIENT_EFFORTS else None
 
 
 def normalize_effort(claude_value: Optional[str], config_override: Optional[str] = None) -> str:

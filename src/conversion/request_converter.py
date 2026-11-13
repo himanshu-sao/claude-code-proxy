@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from src.conversion.effort_mapper import (
     normalize_effort,
     provider_effort,
+    resolve_client_effort,
     resolve_effort,
 )
 from src.core.config import config
@@ -123,7 +124,8 @@ def convert_claude_to_openai(
     # deepseek, chat_template_kwargs for Nemotron, or nothing for always-on
     # thinking and non-reasoning models.
     canonical = normalize_effort(
-        claude_request.reasoning_effort, config.get_effort_default(model_tier)
+        resolve_client_effort(claude_request.reasoning_effort, claude_request.output_config),
+        config.get_effort_default(model_tier),
     )
     if _is_reasoning_model(openai_model):
         spec = resolve_effort(openai_model, canonical)

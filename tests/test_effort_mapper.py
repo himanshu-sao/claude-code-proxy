@@ -6,14 +6,19 @@ proxy targets: NIM GLM-5.x, gpt-oss / o-series, kimi-k3 / deepseek-r1,
 deepseek-v4.1-flash (low/high strings), and NVIDIA Nemotron (chat_template_kwargs).
 """
 
+import pytest
+from pydantic import ValidationError
+
 from src.conversion.effort_mapper import (
     CANONICAL_EFFORTS,
     DEFAULT_EFFORT,
     EffortSpec,
     normalize_effort,
     provider_effort,
+    resolve_client_effort,
     resolve_effort,
 )
+from src.models.claude import ClaudeMessagesRequest
 
 # --- normalize_effort: precedence and canonicalization ---
 
@@ -170,3 +175,155 @@ def test_per_tier_effort_none_when_unset(monkeypatch):
     assert cfg.get_effort_default("big") is None
     assert cfg.get_effort_default("middle") is None
     assert cfg.get_effort_default("small") is None
+
+
+# --- Client effort extraction: reasoning_effort vs output_config.effort ---
+
+_MALFORMED_OUTPUT_CONFIGS = [
+    "high",
+    ["effort", "max"],
+    None,
+    {},
+    {"effort": 5},
+    {"effort": "bogus"},
+    {"effort": "   "},
+    {"effort": None},
+]
+
+
+def _request(**extra):
+    return ClaudeMessagesRequest(
+        model="claude-sonnet-4",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "hi"}],
+        **extra,
+    )
+
+
+def test_reasoning_effort_max_validates():
+    assert _request(reasoning_effort="max").reasoning_effort == "max"
+
+
+def test_reasoning_effort_bogus_is_rejected():
+    # FastAPI turns this ValidationError into a 422 response.
+    with pytest.raises(ValidationError):
+        _request(reasoning_effort="bogus")
+
+
+@pytest.mark.parametrize("output_config", _MALFORMED_OUTPUT_CONFIGS + [{"effort": "max"}])
+def test_output_config_of_any_shape_validates(output_config):
+    assert _request(output_config=output_config).output_config == output_config
+
+
+def test_resolve_client_effort_top_level_beats_output_config():
+    assert resolve_client_effort("low", {"effort": "max"}) == "low"
+
+
+def test_resolve_client_effort_reads_output_config_when_top_level_absent():
+    assert resolve_client_effort(None, {"effort": "max"}) == "max"
+
+
+def test_resolve_client_effort_both_absent():
+    assert resolve_client_effort(None, None) is None
+
+
+@pytest.mark.parametrize("output_config", _MALFORMED_OUTPUT_CONFIGS)
+def test_resolve_client_effort_malformed_output_config_is_absent(output_config):
+    assert resolve_client_effort(None, output_config) is None
+
+
+def test_resolve_client_effort_normalizes_case_and_whitespace():
+    assert resolve_client_effort(None, {"effort": "  HIGH "}) == "high"
+
+
+def test_resolve_client_effort_keeps_xhigh_for_normalize_effort_to_map():
+    client = resolve_client_effort(None, {"effort": "xhigh"})
+    assert client == "xhigh"
+    assert normalize_effort(client) == "max"
+
+
+# --- Converter end-to-end (stub model manager, env via monkeypatch) ---
+
+
+class _StubModelManager:
+    def __init__(self, model, tier):
+        self._result = (model, tier)
+
+    def map_claude_model_to_openai(self, _name):
+        return self._result
+
+
+# glm-5 keeps max as max (low|high|max vocabulary), so the canonical level is
+# directly visible in the emitted reasoning_effort.
+_GLM = "z-ai/glm-5.1"
+
+
+def _convert(monkeypatch, request_fields, model=_GLM, tier="big", **env):
+    from src.conversion import request_converter
+
+    monkeypatch.setattr(request_converter, "config", _fresh_config(monkeypatch, **env))
+    return request_converter.convert_claude_to_openai(
+        _request(**request_fields), _StubModelManager(model, tier)
+    )
+
+
+def test_converter_reads_output_config_effort(monkeypatch):
+    out = _convert(monkeypatch, {"output_config": {"effort": "max"}}, REASONING_EFFORT="low")
+    assert out["reasoning_effort"] == "max"
+
+
+def test_converter_malformed_output_config_falls_back_to_env(monkeypatch):
+    for bad in _MALFORMED_OUTPUT_CONFIGS:
+        out = _convert(monkeypatch, {"output_config": bad}, REASONING_EFFORT="low")
+        assert out["reasoning_effort"] == "low", bad
+
+
+def test_converter_no_client_effort_no_env_defaults_to_high(monkeypatch):
+    out = _convert(monkeypatch, {})
+    assert out["reasoning_effort"] == "high"
+
+
+def test_converter_top_level_beats_output_config(monkeypatch):
+    out = _convert(monkeypatch, {"reasoning_effort": "low", "output_config": {"effort": "max"}})
+    assert out["reasoning_effort"] == "low"
+
+
+def test_converter_top_level_max_is_accepted(monkeypatch):
+    out = _convert(monkeypatch, {"reasoning_effort": "max"}, REASONING_EFFORT="low")
+    assert out["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize(
+    "tier,var",
+    [
+        ("big", "BIG_MODEL_EFFORT"),
+        ("middle", "MIDDLE_MODEL_EFFORT"),
+        ("small", "SMALL_MODEL_EFFORT"),
+    ],
+)
+def test_converter_client_effort_beats_per_tier_env(monkeypatch, tier, var):
+    out = _convert(monkeypatch, {"output_config": {"effort": "max"}}, tier=tier, **{var: "low"})
+    assert out["reasoning_effort"] == "max"
+    out = _convert(monkeypatch, {"reasoning_effort": "max"}, tier=tier, **{var: "low"})
+    assert out["reasoning_effort"] == "max"
+
+
+def test_converter_per_tier_env_applies_when_client_silent(monkeypatch):
+    out = _convert(monkeypatch, {"output_config": {"effort": "bogus"}}, BIG_MODEL_EFFORT="low")
+    assert out["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"reasoning_effort": "max"},
+        {"output_config": {"effort": "max"}},
+        {"reasoning_effort": "low", "output_config": {"effort": "max"}},
+        {"output_config": "bogus"},
+    ],
+)
+def test_converter_non_reasoning_model_gets_no_envelope(monkeypatch, fields):
+    out = _convert(monkeypatch, fields, model="meta/llama-3.1-70b-instruct")
+    assert "reasoning_effort" not in out
+    assert "extra_body" not in out
