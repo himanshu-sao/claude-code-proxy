@@ -1,0 +1,11 @@
+VERDICT: PASS
+
+- Scope: `git diff 1a8143b HEAD -- src/` is only `src/core/signal_log.py:288-292`. It reads `_get(request, "output_config")` first and falls back to `model_extra["output_config"]` only when that is `None`. The `isinstance(output_config, dict)` check, `_names()` filter and `_enum_or_other()` filter on lines 293-298 are unchanged. No new imports, logging, dependencies or I/O.
+- Probe: I ran the base `ClaudeMessagesRequest`, where `output_config` is an extra field, and a simulated T2 subclass with `output_config: Optional[Any] = None`, where it is declared. `import src` resolved inside the worktree (via `PYTHONPATH`), I used the venv python, and I wrote only under `$TMPDIR`. Hostile values were:
+  - a dict with space, ESC, newline, RLO and 200-char keys, plus nested dicts;
+  - a dict with 100,000 keys;
+  - effort values that were a 100k-char string, a dict, a list and sentinel text;
+  - `output_config` set to a str, a list, an int, `{}` and `None`.
+- Result, identical for both shapes. `oc_effort` was always `None`, a member of the enum, or `other`. `oc_keys` held only names matching `[A-Za-z0-9_.:/-]{1,64}` (everything else became `other`), at most 50 entries, with no ESC, newline, RLO or long strings in the serialized record. Non-dict values gave `oc_keys=[]` and `oc_effort=None`. The 100k-key case took about 11 ms. `body_fields` lists `output_config` only as a filtered name in both shapes. Declared and extra together gave the declared value. A declared `None` did not hide an extra.
+- Not a leak: a key that is itself identifier-shaped (my sentinel `SENTINEL_SECRET_xyz` as a key) is logged by name. This is the documented design (filtered identifier-shaped names). It is the same in both shapes and is not new in this delta. Values never reach the record.
+- Error handling: the `effort()` section still runs inside `section()`, which swallows exceptions and logs only `type(exc).__name__` at DEBUG. A request whose `__getattr__` raises, and a dict subclass whose `keys` and `get` raise, both returned a record without raising and without exception text in it. There is no new way to raise into the caller or to log a value. I did not re-run the test suites, as the orchestrator instructed.
