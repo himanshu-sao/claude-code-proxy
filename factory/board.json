@@ -118,7 +118,7 @@
       "feature": "[003 T5] wire signal log into /v1/messages",
       "branch": "factory/003-auto-model-groundwork-t5",
       "kind": "feature",
-      "stage": "review",
+      "stage": "merged",
       "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [
@@ -131,7 +131,7 @@
         "api": "PASS"
       },
       "decision": "APPROVE",
-      "updatedAt": "2026-11-13T23:00:00"
+      "updatedAt": "2026-11-13T23:20:00"
     },
     {
       "id": "003-auto-model-groundwork-t6",
