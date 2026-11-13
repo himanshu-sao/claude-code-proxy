@@ -25,16 +25,23 @@ _LINE_PREFIX = "AUTOSIGNAL "
 
 _DEFAULT_MAX_BYTES = 5242880
 _DEFAULT_BACKUP_COUNT = 3
+# Upper clamps for the env limits: a huge backup count makes every rollover loop
+# over millions of paths on the event loop, and a huge byte cap voids the size bound.
+_MAX_BACKUP_COUNT = 20
+_MAX_MAX_BYTES = 1073741824  # 1 GiB
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _EFFORT_ENUM = {"low", "medium", "high", "xhigh", "max"}
 _THINK_ENUM = {"enabled", "disabled", "adaptive"}
 _REQ_CLASS_ENUM = {"main", "subagent", "workflow", "compaction", "auxiliary"}
 
-_STR_CAP = 64
 _LIST_CAP = 50
 _FM_HASH_CHARS = 512
 _HASH_HEX_CHARS = 8
+
+# Every logged name (field, header, key, model) must match this or it is logged as "other".
+_NAME_RE = re.compile(r"[A-Za-z0-9_.:/-]{1,64}")
+_MAX_SAFE_INT = 2**53
 
 _REMINDER_RE = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.DOTALL)
 
@@ -52,12 +59,15 @@ def _enabled() -> bool:
     return os.environ.get("AUTO_SIGNAL_LOG", "").strip().lower() in _TRUTHY
 
 
-def _int_env(name: str, default: int) -> int:
+def _int_env(name: str, default: int, maximum: Optional[int] = None) -> int:
+    """Positive int from env; invalid/non-positive -> default; above ``maximum`` -> clamped."""
     try:
         value = int(os.environ.get(name, "").strip())
     except (ValueError, AttributeError):
         return default
-    return value if value > 0 else default
+    if value <= 0:
+        return default
+    return min(value, maximum) if maximum is not None else value
 
 
 def _log_path() -> str:
@@ -78,12 +88,22 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
-def _cap(value: Any) -> str:
-    return str(value)[:_STR_CAP]
+def _safe_name(value: Any) -> str:
+    """Client-controlled names are logged only if they look like identifiers."""
+    if isinstance(value, str) and _NAME_RE.fullmatch(value):
+        return value
+    return "other"
 
 
 def _names(values: Any) -> List[str]:
-    return sorted(_cap(v) for v in values)[:_LIST_CAP]
+    return sorted(_safe_name(v) for v in values)[:_LIST_CAP]
+
+
+def _small_int(value: Any) -> Optional[int]:
+    """An int in [0, 2**53), else None (bool, float, huge ints would drop or skew the record)."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < _MAX_SAFE_INT:
+        return value
+    return None
 
 
 def _enum_or_other(value: Any, allowed: set) -> Optional[str]:
@@ -243,13 +263,10 @@ def build_signal_record(request: Any, headers: Any, is_auto_alias: bool) -> Dict
             fields |= set(extra.keys())
         rec["body_fields"] = _names(fields)
         rec["header_names"] = _names(hdrs.keys())
-        rec["model"] = _cap(_get(request, "model", ""))
+        rec["model"] = _safe_name(_get(request, "model", ""))
         rec["auto"] = bool(is_auto_alias)
         rec["stream"] = bool(_get(request, "stream"))
-        max_tokens = _get(request, "max_tokens")
-        rec["max_tokens"] = (
-            max_tokens if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) else None
-        )
+        rec["max_tokens"] = _small_int(_get(request, "max_tokens"))
 
     def counts() -> None:
         messages = list(_get(request, "messages") or [])
@@ -281,10 +298,7 @@ def build_signal_record(request: Any, headers: Any, is_auto_alias: bool) -> Dict
         rec["think_type"] = (
             None if think is None else _enum_or_other(_get(think, "type") or "", _THINK_ENUM)
         )
-        budget = _get(think, "budget_tokens")
-        rec["think_budget"] = (
-            budget if isinstance(budget, int) and not isinstance(budget, bool) else None
-        )
+        rec["think_budget"] = _small_int(_get(think, "budget_tokens"))
 
     def header_flags() -> None:
         rec["beta"] = "anthropic-beta" in hdrs
@@ -319,6 +333,19 @@ def build_signal_record(request: Any, headers: Any, is_auto_alias: bool) -> Dict
 class _SignalFileHandler(RotatingFileHandler):
     """Rotating handler that reports I/O failures at DEBUG instead of stderr."""
 
+    def _open(self):  # type: ignore[override]
+        # Create the file 0600 (it holds prompt/session hashes) and never follow a symlink
+        # at the log path where the platform supports O_NOFOLLOW.
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self.baseFilename, flags, 0o600)
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            return os.fdopen(fd, "a", encoding=self.encoding)
+        except Exception:
+            os.close(fd)
+            raise
+
     def handleError(self, record: logging.LogRecord) -> None:
         _debug_logger().debug("signal_log: write failed")
 
@@ -335,8 +362,10 @@ def _ensure_handler() -> logging.Logger:
         handler = _SignalFileHandler(
             path,
             mode="a",
-            maxBytes=_int_env("AUTO_SIGNAL_LOG_MAX_BYTES", _DEFAULT_MAX_BYTES),
-            backupCount=_int_env("AUTO_SIGNAL_LOG_BACKUP_COUNT", _DEFAULT_BACKUP_COUNT),
+            maxBytes=_int_env("AUTO_SIGNAL_LOG_MAX_BYTES", _DEFAULT_MAX_BYTES, _MAX_MAX_BYTES),
+            backupCount=_int_env(
+                "AUTO_SIGNAL_LOG_BACKUP_COUNT", _DEFAULT_BACKUP_COUNT, _MAX_BACKUP_COUNT
+            ),
             encoding="utf-8",
             delay=True,
         )

@@ -645,4 +645,191 @@ def test_analyzer_separates_repeat_rate_from_constancy(log_file):
     assert "sessions with 2+ turns: 1; exactly 1 distinct fm_hash: 1 (100.0%)" in main_block
     assert "sessions with 2+ turns: 1; exactly 1 distinct fm_hash: 0 (0.0%)" in all_block
     assert "{2: 1}" in all_block
-    assert "NOT shown to be usable" in out
+    assert "insufficient sample" in out
+
+
+# --- rework round 1 ---------------------------------------------------------------------------
+
+MARKER = "HOSTILE MARKER text"
+
+
+def test_hostile_names_are_logged_as_other(log_file):
+    hostile = [
+        MARKER,
+        "has space",
+        "ctl\x1b[31m\nchar",
+        "café-‮",
+        "x" * 65,
+        "",
+    ]
+    for bad in hostile:
+        req = _req(
+            model=bad,
+            metadata={bad: "v"},
+            output_config={bad: 1, "effort": "high"},
+            **{bad or "empty": 1},
+        )
+        rec = signal_log.build_signal_record(req, {bad: "v"}, False)
+        assert rec["model"] == "other", repr(bad)
+        assert rec["meta_keys"] == ["other"], repr(bad)
+        assert sorted(rec["oc_keys"]) == ["effort", "other"], repr(bad)
+        assert ("other" in rec["body_fields"]) == (bad != ""), repr(bad)
+        assert "other" in rec["header_names"] or bad == "", repr(bad)
+        blob = json.dumps(rec)
+        for token in ("HOSTILE", "space", "\\u00e9", "\\u202e", "xxxxxx"):
+            assert token not in blob, (repr(bad), token)
+    # Emit end-to-end for the marker too.
+    signal_log.emit_signal(
+        _req(model=MARKER, metadata={MARKER: 1}, **{MARKER: 1}), {MARKER: "v"}, False
+    )
+    assert "HOSTILE" not in _lines(log_file)[0]
+
+
+def test_legitimate_names_pass_through():
+    rec = signal_log.build_signal_record(
+        _req(model="z-ai/glm-5.3:free", metadata={"user_id": "u"}),
+        {"X-Claude-Code-Session-Id": "s"},
+        False,
+    )
+    assert rec["model"] == "z-ai/glm-5.3:free"
+    assert rec["meta_keys"] == ["user_id"]
+    assert rec["header_names"] == ["x-claude-code-session-id"]
+
+
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="POSIX permissions only")
+def test_log_file_is_created_0600(log_file):
+    signal_log.emit_signal(_req(), {}, False)
+    assert (log_file.stat().st_mode & 0o777) == 0o600
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="needs O_NOFOLLOW")
+def test_symlink_at_log_path_is_not_followed(tmp_path, monkeypatch):
+    target = tmp_path / "victim.txt"
+    target.write_text("untouched")
+    d = tmp_path / "logs"
+    d.mkdir()
+    (d / "auto_signal.log").symlink_to(target)
+    monkeypatch.setattr(signal_log, "_log_path", lambda: str(d / "auto_signal.log"))
+    monkeypatch.setenv("AUTO_SIGNAL_LOG", "1")
+    signal_log.reset_for_tests()
+    try:
+        signal_log.emit_signal(_req(), {}, False)
+        signal_log.emit_signal(_req(), {}, False)
+    finally:
+        signal_log.reset_for_tests()
+    assert target.read_text() == "untouched"
+
+
+def test_env_limits_are_clamped(log_file, monkeypatch):
+    monkeypatch.setenv("AUTO_SIGNAL_LOG_BACKUP_COUNT", "5000000")
+    monkeypatch.setenv("AUTO_SIGNAL_LOG_MAX_BYTES", str(10**15))
+    signal_log.emit_signal(_req(), {}, False)
+    handler = logging.getLogger("auto_signal").handlers[0]
+    assert handler.backupCount == 20
+    assert handler.maxBytes == 1073741824
+    assert signal_log._int_env("AUTO_SIGNAL_LOG_BACKUP_COUNT", 3, 20) == 20
+    monkeypatch.setenv("AUTO_SIGNAL_LOG_BACKUP_COUNT", "20")
+    assert signal_log._int_env("AUTO_SIGNAL_LOG_BACKUP_COUNT", 3, 20) == 20
+    for bad in ("abc", "0", "-5", ""):
+        monkeypatch.setenv("AUTO_SIGNAL_LOG_BACKUP_COUNT", bad)
+        assert signal_log._int_env("AUTO_SIGNAL_LOG_BACKUP_COUNT", 3, 20) == 3
+
+
+def test_huge_and_odd_ints_do_not_drop_the_record(log_file):
+    huge = ClaudeMessagesRequest(
+        model="m",
+        max_tokens=10**5000,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "enabled", "budget_tokens": 10**5000},
+    )
+    signal_log.emit_signal(huge, {}, False)
+    lines = _lines(log_file)
+    assert len(lines) == 1
+    rec = _record(lines[0])
+    assert rec["max_tokens"] is None
+    assert rec["think_budget"] is None
+
+    small = signal_log._small_int
+    assert small(0) == 0
+    assert small(2**53 - 1) == 2**53 - 1
+    for bad in (2**53, -1, True, False, 1.5, "7", None):
+        assert small(bad) is None, bad
+    plain = signal_log.build_signal_record(
+        _req(max_tokens=4096, thinking={"type": "enabled", "budget_tokens": 1024}), {}, False
+    )
+    assert (plain["max_tokens"], plain["think_budget"]) == (4096, 1024)
+    # Floats and bools are not ints, so they are not logged (use the builder directly).
+    odd = signal_log.build_signal_record(
+        {"max_tokens": 1.5, "thinking": {"budget_tokens": True}}, {}, False
+    )
+    assert odd["max_tokens"] is None and odd["think_budget"] is None
+
+
+# --- rework round 1: analyzer ------------------------------------------------------------------
+
+
+def test_analyzer_survives_valid_json_garbage(tmp_path):
+    path = tmp_path / "weird.log"
+    path.write_text(
+        "\n".join(
+            [
+                'AUTOSIGNAL {"sid_hash":[1],"fm_hash":[2]}',
+                'AUTOSIGNAL {"sid_hash":{"a":1},"fm_hash":3}',
+                'AUTOSIGNAL {"body_fields":[[1]],"header_names":[{"a":1},null,5]}',
+                'AUTOSIGNAL {"req_class":[1],"reasoning_effort":{"x":1},"agent":[]}',
+                "AUTOSIGNAL " + "[" * 300000,
+                "AUTOSIGNAL " + '{"a":' * 100000,
+                "",
+            ]
+        )
+    )
+    res = _run(path)
+    assert res.returncode == 0, res.stderr[-500:]
+    assert "Traceback" not in res.stderr
+    _assert_sections(res.stdout)
+
+
+def test_analyzer_prints_names_escaped(tmp_path):
+    path = tmp_path / "ctl.log"
+    path.write_text('AUTOSIGNAL {"body_fields":["\\u001b[31mRED","ok"],"header_names":["a\\nb"]}\n')
+    res = _run(path)
+    assert res.returncode == 0
+    assert "\x1b" not in res.stdout
+    assert "\\x1b[31mRED" in res.stdout
+
+
+def _emit_sessions(n_sessions, turns, shared_first=None):
+    for i in range(n_sessions):
+        first = shared_first or "unique opening prompt %d" % i
+        for _ in range(turns):
+            signal_log.emit_signal(
+                _req(messages=[{"role": "user", "content": first}]),
+                {"x-claude-code-session-id": "sess-%d" % i},
+                True,
+            )
+
+
+def test_analyzer_verdict_usable_with_enough_clean_sessions(log_file):
+    _emit_sessions(12, 3)
+    res = _run(log_file)
+    assert res.returncode == 0, res.stderr
+    out = res.stdout
+    assert "Verdict: fm_hash is usable (thresholds met)" in out
+    assert "constancy >= 95%" in out and "share <= 5%" in out
+    assert "at least 10 sessions" in out
+    assert "constancy 100.0% (12 of 12 sessions, 36 main-thread turns)" in out
+    assert "shared-session share 0.0% (0 of 12 sessions)" in out
+
+
+def test_analyzer_verdict_insufficient_sample(log_file):
+    _emit_sessions(1, 2)
+    res = _run(log_file)
+    assert res.returncode == 0, res.stderr
+    assert "Verdict: fm_hash is insufficient sample" in res.stdout
+    assert "usable (thresholds met)" not in res.stdout
+
+
+def test_analyzer_verdict_not_usable_when_shared(log_file):
+    _emit_sessions(12, 2, shared_first="the same opening prompt")
+    res = _run(log_file)
+    assert "NOT shown to be usable (thresholds not met)" in res.stdout

@@ -23,6 +23,10 @@ from collections import Counter, defaultdict
 
 MARKER = "AUTOSIGNAL "
 TOP_N = 5
+# fm_hash verdict thresholds and the minimum sample below which no verdict is given.
+MIN_CONSTANCY = 0.95  # share of main-thread sessions with exactly 1 distinct fm_hash
+MAX_SHARED = 0.05  # share of sessions whose fm_hash is shared with another session
+MIN_SESSIONS = 10  # sessions with 2+ main-thread turns, and sessions overall
 
 
 def load_records(paths):
@@ -37,7 +41,7 @@ def load_records(paths):
                         continue
                     try:
                         rec = json.loads(line[idx + len(MARKER) :])
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         skipped += 1
                         continue
                     if isinstance(rec, dict):
@@ -84,7 +88,7 @@ def freq_section(title, records, key):
     for rec in records:
         names = rec.get(key)
         if isinstance(names, list):
-            counter.update(str(n) for n in set(names))
+            counter.update(set(ascii(n) for n in names))
     if not counter:
         print("(none)")
         return
@@ -113,7 +117,7 @@ def presence_section(records):
         for name, count in rows:
             print("    %-28s %6d  %s" % (name, count, pct(count, total)))
         for key in ("reasoning_effort", "oc_effort", "think_type"):
-            dist = Counter(str(r.get(key)) for r in recs if r.get(key) is not None)
+            dist = Counter(ascii(r.get(key)) for r in recs if r.get(key) is not None)
             if dist:
                 print("    %s values: %s" % (key, dict(sorted(dist.items()))))
 
@@ -139,21 +143,26 @@ def tool_result_section(records):
 
 def class_section(records):
     section("Request class and auxiliary/subagent share")
-    dist = Counter(str(r.get("req_class")) for r in records if r.get("req_class") is not None)
+    dist = Counter(ascii(r.get("req_class")) for r in records if r.get("req_class") is not None)
     if dist:
         for name, count in sorted(dist.items(), key=lambda kv: (-kv[1], kv[0])):
-            print("  req_class %-12s %6d  %s" % (name, count, pct(count, len(records))))
+            print("  req_class %-14s %6d  %s" % (name, count, pct(count, len(records))))
     else:
         print("  req_class: not present in any record")
     aux = sum(
         1
         for r in records
-        if r.get("agent") is True or r.get("req_class") in ("subagent", "auxiliary")
+        if r.get("agent") is True
+        or (isinstance(r.get("req_class"), str) and r["req_class"] in ("subagent", "auxiliary"))
     )
     print(
         "  subagent/auxiliary (agent id or class): %d of %d (%s)"
         % (aux, len(records), pct(aux, len(records)))
     )
+
+
+def _is_hash(value):
+    return isinstance(value, str) and bool(value)
 
 
 def constancy(by_session):
@@ -167,11 +176,11 @@ def constancy(by_session):
 def key_section(records):
     section("Conversation key comparison (sid_hash vs fm_hash)")
     total = len(records)
-    with_sid = sum(1 for r in records if r.get("sid_hash"))
-    with_fm = sum(1 for r in records if r.get("fm_hash"))
+    with_sid = sum(1 for r in records if _is_hash(r.get("sid_hash")))
+    with_fm = sum(1 for r in records if _is_hash(r.get("fm_hash")))
     print("  sid_hash presence: %d of %d (%s)" % (with_sid, total, pct(with_sid, total)))
     print("  fm_hash presence:  %d of %d (%s)" % (with_fm, total, pct(with_fm, total)))
-    both = [r for r in records if r.get("sid_hash") and r.get("fm_hash")]
+    both = [r for r in records if _is_hash(r.get("sid_hash")) and _is_hash(r.get("fm_hash"))]
     print(
         "  records with both hashes: %d (excluded: %d without both)"
         % (len(both), total - len(both))
@@ -221,14 +230,39 @@ def key_section(records):
 
     print()
     main_multi, main_const = results["main-thread only (agent == false)"]
-    constancy_ok = bool(main_multi) and main_const >= 0.95 * main_multi
-    repeat_ok = bool(all_sessions) and len(shared_sessions) <= 0.05 * len(all_sessions)
+    main_turns = sum(1 for r in both if r.get("agent") is not True)
+    n_sessions = len(all_sessions)
+    const_share = (float(main_const) / main_multi) if main_multi else None
+    shared_share = (float(len(shared_sessions)) / n_sessions) if n_sessions else None
+    print(
+        "  Verdict rule: fm_hash usable only if main-thread constancy >= %d%% and shared-session "
+        "share <= %d%%, with at least %d sessions overall and %d sessions with 2+ main-thread "
+        "turns" % (MIN_CONSTANCY * 100, MAX_SHARED * 100, MIN_SESSIONS, MIN_SESSIONS)
+    )
+    print(
+        "  Measured: constancy %s (%d of %d sessions, %d main-thread turns); shared-session "
+        "share %s (%d of %d sessions)"
+        % (
+            pct(main_const, main_multi),
+            main_const,
+            main_multi,
+            main_turns,
+            pct(len(shared_sessions), n_sessions),
+            len(shared_sessions),
+            n_sessions,
+        )
+    )
     if not both:
         fm_verdict = "undetermined (no records with both hashes)"
-    elif constancy_ok and repeat_ok:
-        fm_verdict = "usable (constancy near 100%, repeat rate near 0%)"
+    elif n_sessions < MIN_SESSIONS or main_multi < MIN_SESSIONS:
+        fm_verdict = (
+            "insufficient sample (%d sessions, %d with 2+ main-thread turns; need at least %d "
+            "of each)" % (n_sessions, main_multi, MIN_SESSIONS)
+        )
+    elif const_share >= MIN_CONSTANCY and shared_share <= MAX_SHARED:
+        fm_verdict = "usable (thresholds met)"
     else:
-        fm_verdict = "NOT shown to be usable (needs constancy near 100% and repeat rate near 0%)"
+        fm_verdict = "NOT shown to be usable (thresholds not met)"
     print("  Verdict: fm_hash is %s" % fm_verdict)
     print("  Verdict: sid_hash key presence rate is %s" % pct(with_sid, total))
 
