@@ -5,12 +5,23 @@ class ModelManager:
     def __init__(self, config):
         self.config = config
 
+    def is_auto_alias(self, name: str) -> bool:
+        """True when auto mode is enabled and name is the (case-insensitive) auto alias."""
+        if not self.config.auto_model_enabled or not isinstance(name, str):
+            return False
+        return name.strip().lower() == self.config.auto_model_alias.lower()
+
     def map_claude_model_to_openai(self, claude_model: str) -> tuple[str, str]:
         """Map Claude model names to OpenAI model names based on BIG/SMALL pattern.
 
         Returns a tuple of (model_name, tier) where tier is one of 'big', 'middle', 'small'.
         The model_name is the currently active model for that tier (respecting fallbacks).
         """
+        # Auto alias is checked first, before every pass-through and substring rule.
+        # Routing logic is added later; for now it resolves explicitly to the BIG tier.
+        if self.is_auto_alias(claude_model):
+            return self.config.get_active_model("big"), "big"
+
         # If it's already an OpenAI model, return as-is
         if claude_model.startswith("gpt-") or claude_model.startswith("o1-"):
             return claude_model, "unknown"
