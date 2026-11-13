@@ -73,3 +73,20 @@ default output cap with no source (precedent: commit c5a0b70). Mention that the 
 undocumented for the custom option, so do not promise it enables effort or thinking. Claude Code only fills `/model` from `/v1/models` when
 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`. It assumes a 200K window for an unrecognized id: set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` or `/autocompact`.
 Optional hint headers need `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`. Do not describe `claude-proxy-auto` as doing any routing yet: it always resolves to the BIG tier.
+
+## Orchestrator addendum 2 (added after the T5 approval, 2026-11-13) — binding for T6
+
+Source: `factory/jobs/003-auto-model-groundwork-t5/decision.md` (its "Carry forward" and point 8) and the T5 reviews. Verify each against the merged code before writing it.
+
+**What T5 does (document the behaviour, not the implementation).**
+- When `AUTO_SIGNAL_LOG` is on, every ACCEPTED `POST /v1/messages` request appends exactly one line to `logs/auto_signal.log`, for all models (not only the auto alias), on both stream and non-stream paths.
+- It runs AFTER authentication and request validation: a request rejected with 401 or 422 is never logged. An accepted request is logged once even if the upstream later fails (500) or the client disconnects.
+- When `ANTHROPIC_API_KEY` is unset the proxy accepts any request (client key validation is disabled): then any network peer that can reach the proxy can append records to the log. Say so, and say the log is meant for a local, single-operator capture.
+- The write is inline on the event loop. Measured in-process: about 0.12 ms added for a typical 41 KB body, about 6 to 10 ms for a 2 MB body, 1.3 to 1.8 ms at a file rollover. No pending write exists at shutdown. State this as measured in-process only, not under concurrent load.
+- Changing `AUTO_SIGNAL_LOG*` in `.env` needs a proxy restart (the switch and the rotation limits are read when the log is first used, not hot-reloaded).
+- A failure to write never changes the response of `/v1/messages`; a failure is visible only in the DEBUG log.
+- T5 adds NO new env var: the five `AUTO_*` variables already listed above are the complete set.
+
+**Test-suite caveat.** `tests/test_main.py` posts to a LIVE proxy on `localhost:8082` (a live-integration test, not part of the offline suite). If you run it against a proxy that has `AUTO_SIGNAL_LOG` on, it adds lines to that proxy's real log. Mention this next to the test commands in the docs only if the docs already describe running that suite.
+
+**Do not claim.** Do not say the live behaviour (real uvicorn header parsing, the default log path modes in a running proxy, latency under load, shutdown, real disconnects) was verified: the user declined local port binding; those checks ran in-process only.

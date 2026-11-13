@@ -118,20 +118,20 @@
       "feature": "[003 T5] wire signal log into /v1/messages",
       "branch": "factory/003-auto-model-groundwork-t5",
       "kind": "feature",
-      "stage": "spec",
-      "round": 0,
+      "stage": "review",
+      "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [
         "003-auto-model-groundwork-t1",
         "003-auto-model-groundwork-t3"
       ],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T21:00:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:00:00"
     },
     {
       "id": "003-auto-model-groundwork-t6",
