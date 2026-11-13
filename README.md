@@ -11,7 +11,7 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 - **Smart Model Mapping**: Configure BIG / MIDDLE / SMALL models via environment variables, with per-tier fallback lists and automatic health-driven failover
 - **Reasoning Effort Control**: Honors Claude Code's `/effort` levels (low/medium/high/xhigh/max), read from either the top-level `reasoning_effort` or `output_config.effort`, and maps them to each upstream's native API (top-level string or chat-template-kwargs depending on the model)
 - **Virtual Auto Model (placeholder)**: an extra `claude-proxy-auto` alias (4th entry in `/v1/models`, configurable or disableable) that currently just resolves to the BIG tier; it does no routing yet
-- **Opt-in Signal Log**: `AUTO_SIGNAL_LOG=1` records one content-free line per accepted `/v1/messages` request in `logs/auto_signal.log`, with an analyzer script, to study real Claude Code traffic (off by default)
+- **Opt-in Signal Log**: `AUTO_SIGNAL_LOG=1` records one line per accepted `/v1/messages` request in `logs/auto_signal.log` (no raw message text or header values, but it does hold two unsalted 8-hex hashes and any identifier-shaped names the client sends), with an analyzer script, to study real Claude Code traffic (off by default; if the proxy is reachable by others and `ANTHROPIC_API_KEY` is unset, any peer can append to it: see the open-proxy warning in "Signal log (Phase 0 capture)")
 - **Function Calling**: Complete tool use support with proper conversion
 - **Streaming Responses**: Real-time SSE streaming support
 - **Image Support**: Base64 encoded image input
@@ -104,7 +104,7 @@ Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow th
 
 **Auto Model Signal Log** (off by default; restart to change; see "Signal log (Phase 0 capture)"):
 
-- `AUTO_SIGNAL_LOG` - Default off. Only `1`, `true`, `yes` or `on` (case-insensitive) enable it; **anything else is off** (fails closed, the opposite of `AUTO_MODEL_ENABLED`).
+- `AUTO_SIGNAL_LOG` - Default off. Only `1`, `true`, `yes` or `on` (case-insensitive) enable it; **anything else is off** (fails closed, the opposite of `AUTO_MODEL_ENABLED`). Read the open-proxy warning in "Signal log (Phase 0 capture)" before enabling it.
 - `AUTO_SIGNAL_LOG_MAX_BYTES` - Size at which `logs/auto_signal.log` rotates (default: `5242880`, clamped to at most `1073741824`, 1 GiB). Invalid, empty or non-positive values use the default.
 - `AUTO_SIGNAL_LOG_BACKUP_COUNT` - Rotated files kept (default: `3`, clamped to at most `20`). Invalid, empty or non-positive values use the default.
 
@@ -204,12 +204,12 @@ The proxy maps Claude model requests to your configured models by tier:
 | haiku models      | `SMALL_MODEL`  | `gpt-4o-mini`                |
 | sonnet models     | `MIDDLE_MODEL` | value of `BIG_MODEL`         |
 | opus models       | `BIG_MODEL`    | `gpt-4o`                     |
-| `AUTO_MODEL_ALIAS` (`claude-proxy-auto`) | active `BIG_MODEL` (follows a BIG fallback); `reason=auto-placeholder` on the request log line | checked first, before the rows below |
+| `AUTO_MODEL_ALIAS` (`claude-proxy-auto`) | active `BIG_MODEL` (follows a BIG fallback); `reason=auto-placeholder` on the request log line | checked first, before every other row (including the haiku/sonnet/opus substring rules) |
 | `gpt-*` / `o1-*` / `ep-*` / `doubao-*` / `deepseek-*` | used as-is (tier `unknown`) | — |
 
 Each tier variable accepts a comma-separated fallback list (e.g. `BIG_MODEL="a,a2,a3"`); on repeated failures the proxy moves down the list and probes the primary in the background to restore it when healthy. Reasoning effort defaults are independently tunable per tier via `BIG_MODEL_EFFORT` / `MIDDLE_MODEL_EFFORT` / `SMALL_MODEL_EFFORT`.
 
-The auto alias does **no routing**: it always resolves to the BIG tier until job 004 adds routing. If `AUTO_MODEL_ENABLED` is off, the default `claude-proxy-auto` is just an unknown name (BIG, `reason=tier-map`), but a custom alias is not sent to BIG: `gpt-auto` falls through to the `gpt-`/`o1-`/`ep-`/`doubao-`/`deepseek-` pass-through (used as-is, tier `unknown`), and an alias containing `haiku`, `sonnet` or `opus` maps to that tier.
+The auto alias does **no routing**: it always resolves to the BIG tier, and routing is not implemented yet (a planned follow-up). If `AUTO_MODEL_ENABLED` is off, the alias is treated like any other unknown name: the pass-through prefixes `gpt-`, `o1-`, `ep-`, `doubao-` and `deepseek-` (case-sensitive) are checked first and the name is used as-is with tier `unknown` (so `gpt-auto` is passed through); otherwise a name containing `haiku`, `sonnet` or `opus` (case-insensitive) maps to that tier (so `my-opus-auto` goes to BIG); everything else, including the default `claude-proxy-auto` and names such as `my-auto` or `GPT-auto`, goes to BIG with `reason=tier-map`.
 
 ### Context windows
 
@@ -217,7 +217,7 @@ Context and output limits are resolved in this order: `MODEL_CONTEXT_LIMITS` env
 
 - **262,144 is NVIDIA's published hosted spec. It is NOT verified live**; the vendors claim about 1M, so the hosted limit may be lower than the model's native one.
 - **32,768 is this repo's own default output cap and has no source** (same precedent as commit `c5a0b70`).
-- The file is read from the **current directory** at startup only; restart after editing it.
+- The file is read from the **current directory** at startup only; restart after editing it. If none exists there, the proxy creates one in that directory at startup.
 - When a configured `BIG_MODEL`/`MIDDLE_MODEL`/`SMALL_MODEL` is missing from it, the proxy runs upstream discovery and **rewrites this tracked file**; discovery output can overwrite curated entries, so review `git diff` after a first run with a new model.
 
 ### Provider Examples
@@ -307,7 +307,7 @@ NVIDIA NIM's deepseek-v4.1-flash changed its effort contract on 2026-10-11: it p
 Notes:
 
 - In-session `/effort` always wins over the proxy env vars.
-- A `max` level maps to the same canonical value as `xhigh`, so its upstream translation is identical to the `xhigh` row. A top-level `reasoning_effort: "max"` is accepted (it used to return 422).
+- A `max` level maps to the same canonical value as `xhigh`, so its upstream translation is identical to the `xhigh` row. A top-level `reasoning_effort: "max"` is accepted .
 - The client level can arrive as top-level `reasoning_effort` or as `output_config.effort`. Precedence: top-level `reasoning_effort` > `output_config.effort` > per-tier `*_MODEL_EFFORT` > `REASONING_EFFORT` > built-in `high`.
 - The top-level field is an exact, case-sensitive set (`low|medium|high|xhigh|max`): `bogus` or `HIGH` returns 422. `output_config.effort` is stripped and lower-cased, and a malformed `output_config` (not an object, `effort` not a string, unknown level) is ignored, never rejected, so the env defaults apply.
 - Nemotron models get `chat_template_kwargs` thinking switches; `medium_effort` is only added when the model name contains `ultra`.
@@ -316,7 +316,7 @@ Notes:
 
 ### Selecting the auto model in Claude Code
 
-`claude-proxy-auto` is a placeholder: it always resolves to the BIG tier and does no routing until job 004 (see Model Mapping). To pick it in Claude Code:
+`claude-proxy-auto` is a placeholder: it always resolves to the BIG tier and does no routing yet (a planned follow-up; see Model Mapping). To pick it in Claude Code:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8082
@@ -335,14 +335,16 @@ These settings come from Claude Code's documentation and have **not** been check
 
 ### Signal log (Phase 0 capture)
 
+**Open-proxy warning.** `HOST` defaults to `0.0.0.0`, and client key validation is off when `ANTHROPIC_API_KEY` is unset, so by default any peer that can reach the proxy can append records to this log. This capture is meant for a local, single-operator run. The strongest fix is to bind `HOST` to a loopback address (`HOST="127.0.0.1"`) **in `.env`**: `.env` is loaded with `override=True` and `.env.example` ships `HOST="0.0.0.0"`, so `HOST=127.0.0.1 ./start.sh` on the command line does not take effect while `.env` sets `HOST`. If you set `ANTHROPIC_API_KEY` instead, use a private random value: the `.env.example` value `your-expected-anthropic-api-key` is public, so copying it verbatim turns validation on but lets anyone who has read this repo in. A key only protects `POST /v1/messages` and `POST /v1/messages/count_tokens`; `/health`, `/test-connection`, `/v1/models` and `/` never check it.
+
 A temporary, opt-in capture to learn what real Claude Code requests look like before any routing is built. Off by default; set `AUTO_SIGNAL_LOG=1` and restart.
 
 - **What is logged:** every request accepted by `POST /v1/messages`, for all models (not only the alias), streaming or not, appends one line to `logs/auto_signal.log`. It is written after authentication and validation, so a 401 or 422 is never logged; an accepted request is logged once even if the upstream later fails or the client disconnects. A failed write never changes the response (it is visible only at `DEBUG`).
 - **Files:** append-only, survives restarts, rotates at `AUTO_SIGNAL_LOG_MAX_BYTES` keeping `AUTO_SIGNAL_LOG_BACKUP_COUNT` files (`auto_signal.log.1` ... `.N`). It is separate from `logs/proxy.log` (truncated on each start), and `logs/` is gitignored. Rotation is safe for the default single uvicorn process only; multiple workers are unsupported.
 - **Configuration:** the on/off switch is read on every request, but `.env` is only loaded at startup (and overrides a shell export), so restart after changing it. `AUTO_SIGNAL_LOG_MAX_BYTES` and `AUTO_SIGNAL_LOG_BACKUP_COUNT` are read once, when the first record is written (the handler is created then).
-- **Privacy:** no message, system, tool or header **values**, and no base64. Each line holds identifier-shaped names (body fields, header names, `output_config` and `metadata` keys, the model name; anything not matching `[A-Za-z0-9_.:/-]{1,64}` is logged as `other`), counts, booleans, enum values, and two 8-hex **unsalted** hashes: `sid_hash` (the `x-claude-code-session-id` header) and `fm_hash` (the first user message: first 512 characters, whitespace-normalised, `<system-reminder>` blocks removed; `fm_stripped` says whether any were). A short or templated prompt can be confirmed by someone who hashes a guess and can read the file. Keep the file local and delete it after the capture.
-- **File mode:** the file is opened with mode `0600` (re-applied with `fchmod` where available) and `O_NOFOLLOW` where the platform has it (the umask can only make it stricter). An existing `logs/` directory keeps its mode: the proxy already creates `logs/` with default modes at startup, so do not assume the directory is `0700`.
-- **Trust warning:** `HOST` defaults to `0.0.0.0`, and client key validation is off when `ANTHROPIC_API_KEY` is unset, so by default any network peer that can reach the proxy can append records to this log. Use it for a local, single-operator capture: set `ANTHROPIC_API_KEY` or `HOST=127.0.0.1`.
+- **Privacy:** no message, system, tool or header **values**, and no base64. Each line holds identifier-shaped names (body fields, header names, `output_config` and `metadata` keys, the model name; anything not matching `[A-Za-z0-9_.:/-]{1,64}` is logged as `other`), counts, booleans, enum values, and two 8-hex **unsalted** hashes: `sid_hash` (the `x-claude-code-session-id` header) and `fm_hash` (the first user message: `<system-reminder>` blocks removed, then whitespace normalised, then cut to the first 512 characters; `fm_stripped` says whether any were removed). Names that match the pattern are logged verbatim, so a key-like string used as a model name, header name or key (for example one starting `sk-` or `ghp_`) would be kept. The hashes are only 32 bits and unsalted, so a short or templated prompt can be confirmed by someone who hashes a guess and can read the file. Keep the file local.
+- **Retention and disk use:** to finish a capture, set `AUTO_SIGNAL_LOG` off and restart the proxy **first** (the proxy keeps the file open, so deleting it while it runs leaves the proxy writing to an unlinked file), then delete `logs/auto_signal.log*`, rotated files included. Worst-case disk use is (`AUTO_SIGNAL_LOG_BACKUP_COUNT` + 1) x `AUTO_SIGNAL_LOG_MAX_BYTES`: up to 21 files x 1 GiB, about 21 GiB, at the maximum clamps, and a peer can drive it when the proxy is open. Keep the defaults (about 20 MB).
+- **File mode:** the file is opened with mode `0600` and `O_NOFOLLOW` where the platform has it. Where `fchmod` exists the file mode is forced to exactly `0600` regardless of umask; without it the umask can only make it stricter. An existing `logs/` directory keeps its mode: the proxy already creates `logs/` with default modes at startup, so do not assume the directory is `0700`. If the module itself had to create the directory under a very strict umask (for example `0277`), it could come out non-writable and writes would be silently skipped (failures are visible only at `DEBUG`).
 - **Cost:** the write runs inline on the event loop: about 0.12 ms for a 41 KB body, 6-10 ms for a 2 MB body, 1.3-1.8 ms at a file rollover. Measured in-process only, not under concurrent load.
 
 Analyze a capture (include the rotated files):
@@ -351,7 +353,7 @@ Analyze a capture (include the rotated files):
 python3 scripts/analyze_signal_log.py logs/auto_signal.log*
 ```
 
-The script uses only the standard library, skips lines it cannot parse, and exits 2 only when no file is given. Its verdict on whether `fm_hash` could serve as a conversation key: **usable** only if main-thread constancy (one distinct `fm_hash` per session) is at least 95% **and** the share of sessions whose `fm_hash` is shared with another session is at most 5%, with at least 10 sessions overall and at least 10 sessions with 2+ main-thread turns. Below those sample sizes it prints "insufficient sample" (or "undetermined" when no record carries both hashes, or "NOT shown to be usable" when the thresholds are missed). The 95% and 5% thresholds are the author's own choice and have not been validated.
+The shell expands the glob (the script does not), so run it after the log exists: zsh stops with "no matches found" otherwise, while bash passes the pattern through and the script warns about a missing file and exits 0. The script uses only the standard library, skips lines it cannot parse, and exits 2 only when no file is given. Its verdict on whether `fm_hash` could serve as a conversation key: **usable** only if main-thread constancy (one distinct `fm_hash` per session) is at least 95% **and** the share of sessions whose `fm_hash` is shared with another session is at most 5%, with at least 10 sessions overall and at least 10 sessions with 2+ main-thread turns. Below those sample sizes it prints "insufficient sample" (or "undetermined" when no record carries both hashes, or "NOT shown to be usable" when the thresholds are missed). The 95% and 5% thresholds are the author's own choice and have not been validated.
 
 **What is NOT verified.** No live HTTP run of this feature has been done (local port binding was declined; checks were in-process only). Also unverified: the real Claude Code request shape (`output_config.effort`, the headers, adaptive thinking) and `_SUPPORTED_CAPABILITIES` behaviour; the 262,144 and 32,768 context figures; latency under load, shutdown and real client disconnects; the default log-path modes in a running proxy; Windows or platforms without `O_NOFOLLOW`; multi-worker use; the 95%/5% thresholds; and the full live `pytest tests/` suite.
 
@@ -383,7 +385,7 @@ uv run pytest tests/
 NVIDIA_API_KEY=nvapi-... uv run scripts/test_nim_effort.py [model]
 ```
 
-Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. These counts were measured in-process; the live suite was not run here.
+Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. The test counts above (214 / 239) are the current numbers and will change as tests are added.
 
 ## Development
 
@@ -420,7 +422,7 @@ claude-code-proxy/
 │   │   ├── config.py              # Env-var configuration
 │   │   ├── model_manager.py       # Tier mapping + fallback/health failover
 │   │   ├── context_manager.py     # Context-window truncation
-│   │   ├── signal_log.py          # Opt-in content-free request log (AUTO_SIGNAL_LOG)
+│   │   ├── signal_log.py          # Opt-in request signal log (no raw message text; AUTO_SIGNAL_LOG)
 │   │   └── provider_discovery.py  # Upstream provider detection
 │   └── models/                    # Pydantic schemas (Claude + OpenAI)
 ├── tests/                       # Unit tests (pytest)

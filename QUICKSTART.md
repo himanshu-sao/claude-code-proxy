@@ -45,13 +45,13 @@ Compatibility" section for details.
 | `claude-*opus*`         | `BIG_MODEL`      |
 | `claude-*sonnet*`       | `MIDDLE_MODEL`   |
 | `claude-*haiku*`        | `SMALL_MODEL`    |
-| `claude-proxy-auto` (`AUTO_MODEL_ALIAS`) | `BIG_MODEL` (placeholder: no routing until job 004) |
+| `claude-proxy-auto` (`AUTO_MODEL_ALIAS`) | `BIG_MODEL` (placeholder: no routing yet) |
 
 Each tier accepts a comma-separated fallback list, and `/effort` levels (`low|medium|high|xhigh|max`, sent as `reasoning_effort` or `output_config.effort`) are translated to your upstream's native reasoning parameters — see the README's "Model Mapping" and "Controlling reasoning effort" sections for full details and provider examples.
 
 ## Optional: auto model
 
-The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/models`). It is a placeholder that always resolves to the BIG tier; it does no routing until job 004. Related variables, all optional and all needing a restart: `AUTO_MODEL_ALIAS`, `AUTO_MODEL_ENABLED` and the opt-in request capture `AUTO_SIGNAL_LOG` (plus `AUTO_SIGNAL_LOG_MAX_BYTES` / `AUTO_SIGNAL_LOG_BACKUP_COUNT`). See the README sections "Selecting the auto model in Claude Code" and "Signal log (Phase 0 capture)".
+The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/models`, present only when `AUTO_MODEL_ENABLED` is on). It is a placeholder that always resolves to the BIG tier; it does no routing yet (a planned follow-up). Related variables, all optional and all needing a restart: `AUTO_MODEL_ALIAS`, `AUTO_MODEL_ENABLED` and the opt-in request capture `AUTO_SIGNAL_LOG` (plus `AUTO_SIGNAL_LOG_MAX_BYTES` / `AUTO_SIGNAL_LOG_BACKUP_COUNT`). See the README sections "Selecting the auto model in Claude Code" and "Signal log (Phase 0 capture)". Before turning `AUTO_SIGNAL_LOG` on, read its open-proxy warning: with the default `HOST="0.0.0.0"` and no `ANTHROPIC_API_KEY`, any peer that can reach the proxy can append to the log, so bind `HOST` to `127.0.0.1` in `.env`.
 
 ## Verify your setup
 
