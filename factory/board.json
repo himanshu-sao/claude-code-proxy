@@ -50,68 +50,68 @@
       "feature": "[003 T1] alias + /v1/models entry",
       "branch": "factory/003-auto-model-groundwork-t1",
       "kind": "feature",
-      "stage": "build",
-      "round": 0,
+      "stage": "needs-human",
+      "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T13:45:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T19:50:00"
     },
     {
       "id": "003-auto-model-groundwork-t2",
       "feature": "[003 T2] effort max + output_config.effort",
       "branch": "factory/003-auto-model-groundwork-t2",
       "kind": "feature",
-      "stage": "build",
-      "round": 0,
+      "stage": "needs-human",
+      "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T13:45:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T19:50:00"
     },
     {
       "id": "003-auto-model-groundwork-t3",
       "feature": "[003 T3] content-free signal log module + analysis script",
       "branch": "factory/003-auto-model-groundwork-t3",
       "kind": "feature",
-      "stage": "build",
-      "round": 0,
+      "stage": "review",
+      "round": 4,
       "parent": "003-auto-model-groundwork",
       "depends": [],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T13:45:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T20:10:00"
     },
     {
       "id": "003-auto-model-groundwork-t4",
       "feature": "[003 T4] context-window cache entries for two MIDDLE models",
       "branch": "factory/003-auto-model-groundwork-t4",
       "kind": "feature",
-      "stage": "build",
-      "round": 0,
+      "stage": "needs-human",
+      "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T13:45:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T19:50:00"
     },
     {
       "id": "003-auto-model-groundwork-t5",

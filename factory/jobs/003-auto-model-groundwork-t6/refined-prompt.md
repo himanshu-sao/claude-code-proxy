@@ -30,3 +30,46 @@ Documents the behaviour delivered by T1-T5; read the merged code and the T1-T5 s
 
 ## Depends on
 003-auto-model-groundwork-t1, 003-auto-model-groundwork-t2, 003-auto-model-groundwork-t3, 003-auto-model-groundwork-t4, 003-auto-model-groundwork-t5 (must be merged before this sub-job starts its spec stage).
+
+## Orchestrator addendum (added after the T1-T4 approvals, 2026-11-13) — binding for T6
+
+These facts come from the approvers' "Carry forward" sections (`decision.md` in the T1, T2, T3 and T4 job folders) and the reviews. Verify each against the
+merged code before writing it down; document what the code does, not what this list says.
+
+**AUTO_MODEL_ALIAS / AUTO_MODEL_ENABLED (T1).** Alias default `claude-proxy-auto`, matched exactly, case-insensitively, after whitespace stripping; an
+empty or whitespace value means the default; checked before the `gpt-`/`o1-`/`ep-`/`deepseek-` pass-through, so a custom alias like `gpt-auto` takes
+the auto branch. `AUTO_MODEL_ENABLED` defaults to true; the exact false values are `false`, `0`, `no`, `off` and the empty string (after strip and
+lowercase). A blank `AUTO_MODEL_ENABLED=` line DISABLES the alias; any other value, including a typo like `flase`, leaves it ENABLED (fails open) —
+say so plainly. When disabled the `/v1/models` entry is removed and the alias is an unknown name (BIG by the unknown-name default, `reason=tier-map`).
+Until job 004 the alias resolves to the active BIG model and follows a BIG fallback. It is the 4th `/v1/models` entry, `display_name` "Auto (routes to big tier)".
+Request log lines end with `reason=auto-placeholder` or `reason=tier-map`. Tests assume no `AUTO_*` keys in the developer's environment.
+
+**Effort (T2).** `reasoning_effort` accepts `low|medium|high|xhigh|max`; `output_config.effort` is also read; precedence top-level `reasoning_effort` >
+`output_config.effort` > per-tier `*_MODEL_EFFORT` > `REASONING_EFFORT` > `high`; `xhigh` maps to `max`; a malformed `output_config` is ignored and never
+rejected; a top-level unknown value like `bogus` still returns 422. Update the README effort-mapping table and features, and the `effort_mapper.py` module
+and `normalize_effort` docstrings (they do not mention `output_config`); check QUICKSTART's effort mentions. Optional cheap test: a TestClient test that
+POST `/v1/messages` with `reasoning_effort: "bogus"` returns 422 (put it in whichever task next touches `tests/test_endpoints.py`).
+
+**Signal log (T3), five env vars.** `AUTO_SIGNAL_LOG` (default off; truthy `1/true/yes/on`), `AUTO_SIGNAL_LOG_MAX_BYTES` (default 5242880, clamped to at most
+1 GiB = 1073741824), `AUTO_SIGNAL_LOG_BACKUP_COUNT` (default 3, clamped to at most 20); invalid, empty or non-positive values fall back to the defaults 5242880
+and 3, values above the clamp are clamped. Document: file `logs/auto_signal.log`, append-only, survives restarts, rotates at the cap, separate from
+`proxy.log` (which is truncated each start). File mode 0600 (created with `O_NOFOLLOW` where the platform has it, so a symlink at the path is not followed).
+The directory is created 0700 only when the module creates it; an existing `logs/` is left alone, and missing parent directories get default modes.
+Rotation is safe for the single uvicorn process only; multiple workers are unsupported. Privacy statement, accurate and not over-claiming: the record holds
+no message, system, tool or header VALUES and no base64; it holds identifier-shaped NAMES (body fields, header names, `output_config` and `metadata` keys,
+the model name; `[A-Za-z0-9_.:/-]{1,64}`, anything else logged as `other`), counts, enum values, and two 8-hex unsalted hashes (session id and first user
+message). Short or templated prompts can be confirmed by someone who hashes a guess and can read the file, so keep the file local and delete it after the
+capture. How to run it: `python scripts/analyze_signal_log.py logs/auto_signal.log*` (rotated files included). Verdict rule: `fm_hash` is usable as a
+conversation key only if main-thread constancy >= 95%, shared-session share <= 5%, with at least 10 sessions overall and 10 sessions with 2+ main-thread
+turns; below that the analyzer says "insufficient sample". The 95%/5% thresholds are the builder's own choice (the spec gave no numbers).
+
+**Context windows (T4).** Both `mistralai/mistral-large-4-1t-a52b` and `minimaxai/minimax-m3.1-flash` are `[262144, 32768]` in `model_contexts_cache.json`.
+Do NOT call 262,144 verified or 32,768 sourced: 262,144 is NVIDIA's published hosted spec (vendors claim about 1M), not verified live; 32,768 is the repo's own
+default output cap with no source (precedent: commit c5a0b70). Mention that the proxy reads the cache from the current directory, loads it only at startup
+(restart after changing it), rewrites the tracked file when a configured model is missing from it, and that provider discovery output can overwrite curated entries.
+
+**Selecting the auto model in Claude Code** (from the research; mark capability behavior as UNVERIFIED): `ANTHROPIC_CUSTOM_MODEL_OPTION=claude-proxy-auto` plus
+`_NAME` and `_DESCRIPTION`; the `_SUPPORTED_CAPABILITIES` variable is documented to have no effect behind a gateway for the `ANTHROPIC_DEFAULT_*` family and is
+undocumented for the custom option, so do not promise it enables effort or thinking. Claude Code only fills `/model` from `/v1/models` when
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`. It assumes a 200K window for an unrecognized id: set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` or `/autocompact`.
+Optional hint headers need `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`. Do not describe `claude-proxy-auto` as doing any routing yet: it always resolves to the BIG tier.

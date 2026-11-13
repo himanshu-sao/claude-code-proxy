@@ -170,3 +170,22 @@ Nothing has been written to `model_contexts_cache.json` yet. Neither model is cu
    must define a size cap with rotation (RotatingFileHandler is fine) via env vars documented in `.env.example` and
    README, must create the `logs/` directory if missing, and must never let a logging failure break a request.
    `logs/` must stay gitignored (verify). The `AUTOSIGNAL` line prefix can stay for grep-ability.
+
+## Notes for T5 and job 004 (from the T3 security review, 2026-11-13)
+
+- T5 must call `emit_signal` AFTER request validation, wrapped so it cannot raise into the request. The file write
+  is blocking I/O on the event loop; offload it (for example `run_in_executor`) if it can be done without
+  complicating the request path, otherwise state the trade-off in the T5 spec.
+- The signal-log hashes are 8 hex (32 bits), unsalted, kept for this capture only. Job 004 needs at least 64 bits for a
+  real conversation key, and that key must live in memory, not in a persistent file.
+
+## Additional notes for job 004 (from the T3 approval, 2026-11-13)
+
+- The signal-log hashes (`sid_hash`, `fm_hash`) are 8 hex characters, unsalted, for the Phase 0 capture only. They must NOT be reused as the routing or
+  stickiness key. Job 004's conversation key must be at least 64 bits and held in memory, never written to a persistent file.
+- Job 004 should add a test that round-trips a real `emit_signal` hash through the analyzer's `_is_hash` (`scripts/analyze_signal_log.py`), so a future change to the hash
+  length or format cannot silently zero the analyzer's key comparison (the analyzer accepts only `[0-9a-f]{1,64}`).
+- Process lesson from job 003: when sub-jobs touch the same request model, run a combined-tree merge check BEFORE the individual reviews close. T2 declared
+  `output_config` as a field and T3 read it only from `model_extra`; no single-branch review could see it, and it cost an extra review round.
+- Optional hardening noted by the approvers (not part of job 003): guard the discovery `update()` in `provider_discovery.py` so provider metadata cannot
+  overwrite curated cache entries; sanitize the client-supplied model name in the request log line (pre-existing log-injection surface).
