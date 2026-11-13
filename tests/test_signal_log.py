@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Any, Optional
 
 import pytest
 
@@ -38,14 +39,29 @@ def log_file(tmp_path, monkeypatch):
     signal_log.reset_for_tests()
 
 
-def _req(**overrides):
+class _DeclaredOutputConfigRequest(ClaudeMessagesRequest):
+    """Simulates sub-job T2, which declares output_config as a real model field."""
+
+    output_config: Optional[Any] = None
+
+
+# The base model keeps output_config in model_extra; the subclass declares it as an attribute.
+REQUEST_CLASSES = [ClaudeMessagesRequest, _DeclaredOutputConfigRequest]
+
+
+@pytest.fixture(params=REQUEST_CLASSES, ids=["extra", "declared"])
+def req_cls(request):
+    return request.param
+
+
+def _req(_cls=ClaudeMessagesRequest, **overrides):
     body = {
         "model": "claude-proxy-auto",
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": "hello world"}],
     }
     body.update(overrides)
-    return ClaudeMessagesRequest(**body)
+    return _cls(**body)
 
 
 def _lines(path):
@@ -103,7 +119,7 @@ def test_one_line_per_call_and_no_propagation(log_file):
 # --- 3/4. sentinel + field values --------------------------------------------
 
 
-def test_sentinels_never_appear_and_fields_are_correct(log_file):
+def test_sentinels_never_appear_and_fields_are_correct(log_file, req_cls):
     sid = "SENTINEL-SESSION-ID-123"
     s = {
         k: "SENTINEL_" + k
@@ -181,7 +197,7 @@ def test_sentinels_never_appear_and_fields_are_correct(log_file):
         custom_extra_field=s["extra_val"],
         reasoning_effort="xhigh",
     )
-    req = _req(**body)
+    req = _req(req_cls, **body)
     headers = {
         "X-Api-Key": s["apikey"],
         "Authorization": "Bearer " + s["auth"],
@@ -242,10 +258,13 @@ def test_sentinels_never_appear_and_fields_are_correct(log_file):
     assert rec["fm_stripped"] is False
 
 
-def test_enum_values_are_logged_when_known():
+def test_enum_values_are_logged_when_known(req_cls):
     rec = signal_log.build_signal_record(
         _req(
-            output_config={"effort": "MAX"}, reasoning_effort="low", thinking={"type": "adaptive"}
+            req_cls,
+            output_config={"effort": "MAX"},
+            reasoning_effort="low",
+            thinking={"type": "adaptive"},
         ),
         {"x-claude-code-request-class": "Subagent"},
         False,
@@ -653,7 +672,7 @@ def test_analyzer_separates_repeat_rate_from_constancy(log_file):
 MARKER = "HOSTILE MARKER text"
 
 
-def test_hostile_names_are_logged_as_other(log_file):
+def test_hostile_names_are_logged_as_other(log_file, req_cls):
     hostile = [
         MARKER,
         "has space",
@@ -664,6 +683,7 @@ def test_hostile_names_are_logged_as_other(log_file):
     ]
     for bad in hostile:
         req = _req(
+            req_cls,
             model=bad,
             metadata={bad: "v"},
             output_config={bad: 1, "effort": "high"},
@@ -887,3 +907,58 @@ def test_analyzer_does_not_print_raw_escape_from_hash_values(tmp_path):
     assert res.returncode == 0, res.stderr
     assert "\x1b" not in res.stdout
     assert "\x1b" not in res.stderr
+
+
+# --- rework round 3: output_config as declared field vs model_extra --------------------------
+
+
+def test_output_config_effort_kept_or_other(req_cls):
+    for given, expected in (
+        ("max", "max"),
+        ("HIGH", "high"),
+        ("SENTINEL_x", "other"),
+        (5, "other"),
+    ):
+        rec = signal_log.build_signal_record(
+            _req(req_cls, output_config={"effort": given}), {}, False
+        )
+        assert rec["oc_effort"] == expected, given
+        assert rec["oc_keys"] == ["effort"]
+
+
+def test_output_config_absent_or_not_a_dict(req_cls):
+    rec = signal_log.build_signal_record(_req(req_cls), {}, False)
+    assert (rec["oc_keys"], rec["oc_effort"]) == ([], None)
+    for odd in ("high", 7, ["effort"], True):
+        rec = signal_log.build_signal_record(_req(req_cls, output_config=odd), {}, False)
+        assert (rec["oc_keys"], rec["oc_effort"]) == ([], None), odd
+    rec = signal_log.build_signal_record(_req(req_cls, output_config=None), {}, False)
+    assert (rec["oc_keys"], rec["oc_effort"]) == ([], None)
+
+
+def test_output_config_field_names_appear_in_body_fields(req_cls):
+    rec = signal_log.build_signal_record(_req(req_cls, output_config={"effort": "low"}), {}, False)
+    assert "output_config" in rec["body_fields"]
+    assert (
+        "output_config"
+        not in signal_log.build_signal_record(_req(req_cls), {}, False)["body_fields"]
+    )
+
+
+def test_declared_output_config_wins_over_extra_and_none_does_not_hide_it():
+    both = _req(_DeclaredOutputConfigRequest, output_config={"effort": "low", "a": 1})
+    both.__pydantic_extra__["output_config"] = {"effort": "max", "b": 1}
+    rec = signal_log.build_signal_record(both, {}, False)
+    assert rec["oc_effort"] == "low"
+    assert rec["oc_keys"] == ["a", "effort"]
+
+    none_declared = _req(_DeclaredOutputConfigRequest)
+    none_declared.__pydantic_extra__["output_config"] = {"effort": "max"}
+    rec = signal_log.build_signal_record(none_declared, {}, False)
+    assert rec["oc_effort"] == "max"
+    assert rec["oc_keys"] == ["effort"]
+
+
+def test_reasoning_effort_is_read_from_the_attribute(req_cls):
+    rec = signal_log.build_signal_record(_req(req_cls, reasoning_effort="xhigh"), {}, False)
+    assert rec["reasoning_effort"] == "xhigh"

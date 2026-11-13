@@ -285,7 +285,11 @@ def build_signal_record(request: Any, headers: Any, is_auto_alias: bool) -> Dict
 
     def effort() -> None:
         rec["reasoning_effort"] = _enum_or_other(_get(request, "reasoning_effort"), _EFFORT_ENUM)
-        output_config = extra.get("output_config") if isinstance(extra, dict) else None
+        # A declared field is an attribute, an undeclared one lives in model_extra; the
+        # declared value wins, and a declared-but-None field must not hide an extra.
+        output_config = _get(request, "output_config")
+        if output_config is None and isinstance(extra, dict):
+            output_config = extra.get("output_config")
         if isinstance(output_config, dict):
             rec["oc_keys"] = _names(output_config.keys())
             rec["oc_effort"] = _enum_or_other(output_config.get("effort"), _EFFORT_ENUM)
