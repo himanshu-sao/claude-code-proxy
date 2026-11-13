@@ -50,7 +50,7 @@
       "feature": "[003 T1] alias + /v1/models entry",
       "branch": "factory/003-auto-model-groundwork-t1",
       "kind": "feature",
-      "stage": "needs-human",
+      "stage": "merged",
       "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
@@ -60,14 +60,14 @@
         "api": "BLOCKED"
       },
       "decision": "APPROVE",
-      "updatedAt": "2026-11-13T19:50:00"
+      "updatedAt": "2026-11-13T20:40:00"
     },
     {
       "id": "003-auto-model-groundwork-t2",
       "feature": "[003 T2] effort max + output_config.effort",
       "branch": "factory/003-auto-model-groundwork-t2",
       "kind": "feature",
-      "stage": "needs-human",
+      "stage": "merged",
       "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
@@ -77,14 +77,14 @@
         "api": "BLOCKED"
       },
       "decision": "APPROVE",
-      "updatedAt": "2026-11-13T19:50:00"
+      "updatedAt": "2026-11-13T20:40:00"
     },
     {
       "id": "003-auto-model-groundwork-t3",
       "feature": "[003 T3] content-free signal log module + analysis script",
       "branch": "factory/003-auto-model-groundwork-t3",
       "kind": "feature",
-      "stage": "review",
+      "stage": "merged",
       "round": 4,
       "parent": "003-auto-model-groundwork",
       "depends": [],
@@ -94,14 +94,14 @@
         "api": "PASS"
       },
       "decision": "APPROVE",
-      "updatedAt": "2026-11-13T20:10:00"
+      "updatedAt": "2026-11-13T20:40:00"
     },
     {
       "id": "003-auto-model-groundwork-t4",
       "feature": "[003 T4] context-window cache entries for two MIDDLE models",
       "branch": "factory/003-auto-model-groundwork-t4",
       "kind": "feature",
-      "stage": "needs-human",
+      "stage": "merged",
       "round": 1,
       "parent": "003-auto-model-groundwork",
       "depends": [],
@@ -111,7 +111,7 @@
         "api": "BLOCKED"
       },
       "decision": "APPROVE",
-      "updatedAt": "2026-11-13T19:50:00"
+      "updatedAt": "2026-11-13T20:40:00"
     },
     {
       "id": "003-auto-model-groundwork-t5",
@@ -131,7 +131,7 @@
         "api": "pending"
       },
       "decision": "pending",
-      "updatedAt": "2026-11-13T13:20:00"
+      "updatedAt": "2026-11-13T21:00:00"
     },
     {
       "id": "003-auto-model-groundwork-t6",
