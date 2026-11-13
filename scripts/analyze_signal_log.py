@@ -18,11 +18,13 @@ It answers two separate questions about candidate conversation keys:
 """
 
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 
 MARKER = "AUTOSIGNAL "
 TOP_N = 5
+_HASH_RE = re.compile(r"[0-9a-f]{1,64}")
 # fm_hash verdict thresholds and the minimum sample below which no verdict is given.
 MIN_CONSTANCY = 0.95  # share of main-thread sessions with exactly 1 distinct fm_hash
 MAX_SHARED = 0.05  # share of sessions whose fm_hash is shared with another session
@@ -162,7 +164,7 @@ def class_section(records):
 
 
 def _is_hash(value):
-    return isinstance(value, str) and bool(value)
+    return isinstance(value, str) and _HASH_RE.fullmatch(value) is not None
 
 
 def constancy(by_session):
@@ -207,7 +209,7 @@ def key_section(records):
     )
     top = sorted(sessions_by_fm.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:TOP_N]
     for fm, sids in top:
-        print("    top group fm_hash=%s sessions=%d" % (fm, len(sids)))
+        print("    top group fm_hash=%s sessions=%d" % (ascii(fm)[1:-1], len(sids)))
 
     print()
     print("  (b) Constancy: distinct fm_hash per sid_hash")

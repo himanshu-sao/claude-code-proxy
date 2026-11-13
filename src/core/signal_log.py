@@ -358,7 +358,9 @@ def _ensure_handler() -> logging.Logger:
         if logger.handlers:
             return logger
         path = _log_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Only a directory created here gets 0700 (leaf only, still filtered by the umask;
+        # missing parents get default modes). An existing directory is never chmod-ed.
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         handler = _SignalFileHandler(
             path,
             mode="a",

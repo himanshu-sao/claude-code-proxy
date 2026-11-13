@@ -833,3 +833,57 @@ def test_analyzer_verdict_not_usable_when_shared(log_file):
     _emit_sessions(12, 2, shared_first="the same opening prompt")
     res = _run(log_file)
     assert "NOT shown to be usable (thresholds not met)" in res.stdout
+
+
+# --- rework round 2 ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def umask_022():
+    old = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="POSIX permissions only")
+def test_created_log_directory_is_0700(tmp_path, monkeypatch, umask_022):
+    path = tmp_path / "newlogs" / "auto_signal.log"
+    monkeypatch.setattr(signal_log, "_log_path", lambda: str(path))
+    monkeypatch.setenv("AUTO_SIGNAL_LOG", "1")
+    signal_log.reset_for_tests()
+    try:
+        signal_log.emit_signal(_req(), {}, False)
+    finally:
+        signal_log.reset_for_tests()
+    assert (path.parent.stat().st_mode & 0o777) == 0o700
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="POSIX permissions only")
+def test_existing_log_directory_is_not_tightened(tmp_path, monkeypatch, umask_022):
+    d = tmp_path / "existing"
+    d.mkdir()
+    d.chmod(0o755)
+    monkeypatch.setattr(signal_log, "_log_path", lambda: str(d / "auto_signal.log"))
+    monkeypatch.setenv("AUTO_SIGNAL_LOG", "1")
+    signal_log.reset_for_tests()
+    try:
+        signal_log.emit_signal(_req(), {}, False)
+    finally:
+        signal_log.reset_for_tests()
+    assert (d.stat().st_mode & 0o777) == 0o755
+    assert len(_lines(d / "auto_signal.log")) == 1
+
+
+def test_analyzer_does_not_print_raw_escape_from_hash_values(tmp_path):
+    path = tmp_path / "esc.log"
+    path.write_text(
+        'AUTOSIGNAL {"sid_hash":"\\u001b[31mabc","fm_hash":"\\u001b[31mdef"}\n'
+        'AUTOSIGNAL {"sid_hash":"\\u001b[32m","fm_hash":"\\u001b[31mdef"}\n'
+    )
+    res = _run(path)
+    assert res.returncode == 0, res.stderr
+    assert "\x1b" not in res.stdout
+    assert "\x1b" not in res.stderr
