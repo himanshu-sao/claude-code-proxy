@@ -27,6 +27,134 @@
       },
       "decision": "pending",
       "updatedAt": "2026-10-12T14:00:00"
+    },
+    {
+      "id": "003-auto-model-groundwork",
+      "feature": "Virtual auto model groundwork: claude-proxy-auto alias + /v1/models entry, effort max/output_config handling, content-free signal log, context-window data fixes, docs",
+      "branch": "factory/003-auto-model-groundwork",
+      "kind": "feature",
+      "stage": "decomposed",
+      "round": 0,
+      "parent": null,
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:20:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t1",
+      "feature": "[003 T1] alias + /v1/models entry",
+      "branch": "factory/003-auto-model-groundwork-t1",
+      "kind": "feature",
+      "stage": "build",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:45:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t2",
+      "feature": "[003 T2] effort max + output_config.effort",
+      "branch": "factory/003-auto-model-groundwork-t2",
+      "kind": "feature",
+      "stage": "build",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:45:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t3",
+      "feature": "[003 T3] content-free signal log module + analysis script",
+      "branch": "factory/003-auto-model-groundwork-t3",
+      "kind": "feature",
+      "stage": "build",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:45:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t4",
+      "feature": "[003 T4] context-window cache entries for two MIDDLE models",
+      "branch": "factory/003-auto-model-groundwork-t4",
+      "kind": "feature",
+      "stage": "build",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:45:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t5",
+      "feature": "[003 T5] wire signal log into /v1/messages",
+      "branch": "factory/003-auto-model-groundwork-t5",
+      "kind": "feature",
+      "stage": "spec",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [
+        "003-auto-model-groundwork-t1",
+        "003-auto-model-groundwork-t3"
+      ],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:20:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t6",
+      "feature": "[003 T6] docs and .env.example",
+      "branch": "factory/003-auto-model-groundwork-t6",
+      "kind": "feature",
+      "stage": "spec",
+      "round": 0,
+      "parent": "003-auto-model-groundwork",
+      "depends": [
+        "003-auto-model-groundwork-t1",
+        "003-auto-model-groundwork-t2",
+        "003-auto-model-groundwork-t3",
+        "003-auto-model-groundwork-t4",
+        "003-auto-model-groundwork-t5"
+      ],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "pending",
+      "updatedAt": "2026-11-13T13:20:00"
     }
   ]
 }
