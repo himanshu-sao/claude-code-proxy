@@ -147,7 +147,13 @@ def test_top_level_max_is_forwarded_as_max_to_upstream(upstream, monkeypatch):
             return await super().create_chat_completion(request, request_id, model_tier)
 
     monkeypatch.setattr(_config, "big_models", ["z-ai/glm-5.1"])
+
+    async def _capture_async():
+        return _Capture()
+
     monkeypatch.setattr(_config, "get_next_client", lambda: _Capture())
+    # Request handlers use the async getter (the sync one sleeps on the event loop).
+    monkeypatch.setattr(_config, "get_next_client_async", _capture_async)
     res = client.post("/v1/messages", json=_body(model=TIER_MODEL, reasoning_effort="max"))
     assert res.status_code == 200
     assert len(captured) == 1
