@@ -423,7 +423,9 @@ class _Http:
 
 
 @pytest.fixture
-def hanging(monkeypatch):
+async def hanging(monkeypatch):
+    # async so the asyncio.Event objects are built inside the running loop (Python 3.9 binds
+    # them to the current loop at construction)
     monkeypatch.setattr(endpoints, "FIRST_CHUNK_POLL_SECONDS", 0.01)
     failures = []
     monkeypatch.setattr(_config, "report_model_failure", lambda m, t: failures.append((m, t)))
