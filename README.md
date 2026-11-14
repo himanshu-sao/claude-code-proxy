@@ -18,6 +18,7 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 - **Custom Headers**: Automatic injection of custom HTTP headers for API requests
 - **Desktop App Compatibility**: Minimal Anthropic control-plane endpoints (`/api/organizations`, `/v1/me`, a non-expiring `/v1/oauth/token` echo, empty connector/plugin listings) so the Claude Code desktop app's connectors/plugins browse UI opens instead of erroring; any other unknown `/v1` or `/api` path returns a well-formed Anthropic-style 404
 - **Error Handling**: Comprehensive error handling and logging
+- **Anthropic-shaped errors**: `/v1/messages` errors are returned with the real HTTP status in the Anthropic error shape (`{"type":"error","error":{...}}`); a stream that fails after it has begun (including one that ends without a `finish_reason`) ends with one `event: error` and no `message_stop`
 
 ## Quick Start
 
