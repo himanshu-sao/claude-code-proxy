@@ -1,7 +1,7 @@
 VERDICT: BLOCKED
 
 - Could not run the live HTTP check. The sandbox denied binding a local port, so the fake upstream never started and no scratch proxy was started. Nothing was observed over HTTP, and the effort behaviours below are unverified.
-- Setup that worked: `/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src; print(src.__file__)"` from the worktree printed `.../claude-code-proxy/.claude/worktrees/003-t2/src/__init__.py`, which is inside the worktree.
+- Setup that worked: `~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src; print(src.__file__)"` from the worktree printed `.../claude-code-proxy/.claude/worktrees/003-t2/src/__init__.py`, which is inside the worktree.
 - Command that failed: `$PY $TMPDIR/t2api/fake_upstream.py 8798 $TMPDIR/t2api/req.jsonl`. This is a FastAPI/uvicorn fake `/v1/chat/completions` on 127.0.0.1:8798 that logs request bodies.
 - Exact error: `ERROR:    [Errno 1] error while attempting to bind on address ('127.0.0.1', 8798): [errno 1] operation not permitted`
 - The Bash sandbox has local port binding disabled. Setting `sandbox.network.allowLocalBinding: true` in the settings would allow it. I did not work around it. The fake upstream (port 8798) and the scratch proxy (port 8799) both need local binding.

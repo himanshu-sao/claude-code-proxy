@@ -3,8 +3,8 @@ VERDICT: PASS
 Executed the T6 documentation (README.md, QUICKSTART.md, .env.example, effort_mapper docstrings) in-process, without a server and without binding a port or starting uvicorn. Every runnable claim I checked matched observed behaviour, apart from three minor wording nits (N1-N3 below) that do not block a merge. Nothing is BLOCKED; the items that need a real server or a real Claude Code are listed under UNVERIFIED.
 
 Setup and substitutions
-- Worktree: `/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t6`, HEAD = docs commit 0e58d00 + build notes; diff base 11b8f2a.
-- Substituted the venv python `/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python` (3.14.0) with `python -m pytest ...` for the docs' `uv run pytest ...`, and for `python3`. `uv` itself was not run. `OPENAI_API_KEY=test-key`. Scratch files only under `$TMPDIR` (= `/tmp/claude-501/t6/...`). `logs/` in the worktree contains only `proxy.log` before and after; the real `logs/auto_signal.log` and the real `model_contexts_cache.json` were never created or written (sha1 of the cache compared before/after).
+- Worktree: `~/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t6`, HEAD = docs commit 0e58d00 + build notes; diff base 11b8f2a.
+- Substituted the venv python `~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python` (3.14.0) with `python -m pytest ...` for the docs' `uv run pytest ...`, and for `python3`. `uv` itself was not run. `OPENAI_API_KEY=test-key`. Scratch files only under `$TMPDIR` (= `/tmp/claude-501/t6/...`). `logs/` in the worktree contains only `proxy.log` before and after; the real `logs/auto_signal.log` and the real `model_contexts_cache.json` were never created or written (sha1 of the cache compared before/after).
 - `python -c "import src; print(src.__file__)"` resolves inside the worktree.
 - The parent checkout's `.env` is picked up by `load_dotenv(override=True)` (it has no `AUTO_*` keys); I overrode tier models on the config object where a check needed them.
 

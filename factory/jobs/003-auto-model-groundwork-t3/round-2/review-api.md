@@ -5,7 +5,7 @@ One finding, low severity. The log DIRECTORY that `emit_signal` creates is 0755 
 Scope: T3 is not wired into /v1/messages (that is T5), so there is no HTTP surface. No server was started and none is running. I exercised the module and the analyzer from plain python processes.
 
 Setup (all from the worktree, commit 3bb73e1)
-- `PY=/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python`, `PYTHONPATH=<worktree>`, `OPENAI_API_KEY=test-key`, `AUTO_SIGNAL_LOG=1`.
+- `PY=~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python`, `PYTHONPATH=<worktree>`, `OPENAI_API_KEY=test-key`, `AUTO_SIGNAL_LOG=1`.
 - `$PY -c "import src; print(src.__file__)"` printed `<worktree>/src/__init__.py`.
 - Scratch: `$TMPDIR/t3r2` (/tmp/claude-501/t3r2). Driver scripts: `run.py`, `driver.py` and `synth.py` (the round-1 ones), plus `clamp.py`, `hostile.py`, `hostile2.py` and `gen.py`. `run.py` monkeypatches `signal_log._log_path` to a scratch dir. Bodies are real `ClaudeMessagesRequest` objects, Claude Code shaped (44 KB system prompt, 30 tools, a 7-message history with tool_use/tool_result rounds and thinking blocks, an injected `<system-reminder>`, adaptive thinking, output_config.effort, metadata.user_id, and x-api-key and session-id headers).
 - The real `logs/` was never written. It held only `proxy.log` before and after.

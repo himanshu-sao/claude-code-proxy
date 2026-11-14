@@ -104,7 +104,7 @@ I looked for cross-sub-job defects on the merged tree and found no new bug. The 
   - `tests/test_signal_log.py` is 964 lines. It is large, but the module is a security-sensitive surface and the tests are organised by behaviour.
   - `scripts/analyze_signal_log.py` is 295 lines, standard library only.
   - Together this is about 1,670 lines to maintain for a temporary Phase 0 capture. The PR author should be ready to remove it if the capture is abandoned.
-- **Re-runs by me, from /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy.**
+- **Re-runs by me, from ~/Work/src/extra/himanshu-sao/claude-code-proxy.**
   - `src` resolved to this checkout's `src`.
   - The five-file set gave 214 passed.
   - `tests/ --ignore=tests/test_main.py` gave 239 passed.

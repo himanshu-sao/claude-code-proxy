@@ -1,7 +1,7 @@
 VERDICT: BLOCKED
 
 - Binding port 8799 is denied by the sandbox, so no live HTTP check was possible. I did not work around it.
-- Commands run, from /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t1:
+- Commands run, from ~/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t1:
   - `$PY -c "import src; print(src.__file__)"` printed `.../.claude/worktrees/003-t1/src/__init__.py`, which is inside the worktree. `$PY` is the shared venv python.
   - With `OPENAI_API_KEY=test-key OPENAI_BASE_URL=http://127.0.0.1:9/v1 BIG_MODEL=fake-big MIDDLE_MODEL=fake-middle SMALL_MODEL=fake-small` exported, I ran `$PY -m uvicorn src.main:app --port 8799`.
   - Exact error: `ERROR:    [Errno 1] error while attempting to bind on address ('127.0.0.1', 8799): [errno 1] operation not permitted`.

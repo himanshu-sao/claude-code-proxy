@@ -34,5 +34,5 @@ Add `src/core/errors.py`, one place that turns an upstream OpenAI-SDK exception 
 
 ## Verify
 From the job worktree, with the shared venv:
-`OPENAI_API_KEY=test-key /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider`
+`OPENAI_API_KEY=test-key ~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider`
 Expect all 377 baseline tests passing, 4 xfailed, plus the new tests. Run `uv run black src/ && uv run isort src/` and make sure it leaves no diff.

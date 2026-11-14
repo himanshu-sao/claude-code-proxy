@@ -35,7 +35,7 @@ After the fix, all of these pass.
 - mut3, empty-text fallback removed: 2 failed.
 
 ## Final gate (from the worktree; `src` confirmed to resolve to .claude/worktrees/005-e/src on both interpreters)
-- `OPENAI_API_KEY=test-key /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider -q` -> 592 passed (3.14; baseline 571), 0 xfailed, 0 XPASS.
+- `OPENAI_API_KEY=test-key ~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider -q` -> 592 passed (3.14; baseline 571), 0 xfailed, 0 XPASS.
 - `OPENAI_API_KEY=test-key /usr/bin/python3 -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider -q` -> 592 passed (3.9.6; baseline 569 passed + 2 errors), 0 errors.
 - tests/test_midstream_errors.py (includes the byte-identical success test, untouched): 11 passed.
 - black -l 100 --check and isort --profile black -l 100 --check on src/ and tests/: clean.

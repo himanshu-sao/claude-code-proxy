@@ -41,8 +41,8 @@ No existing test was edited, and none needed to change.
 
 Venv check (run from the worktree):
 ```
-/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src,os; print(os.path.realpath(os.path.dirname(src.__file__)))"
-→ /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/005-a/src
+~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src,os; print(os.path.realpath(os.path.dirname(src.__file__)))"
+→ ~/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/005-a/src
 ```
 
 Offline gate (before and after the format pass, same result):

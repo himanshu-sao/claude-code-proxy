@@ -3,7 +3,7 @@ VERDICT: PASS
 Round 2 run-the-docs review of the reworked T6 docs (rework commit ae1ae5b, base 11b8f2a). No port was bound and no uvicorn was started (the user declined local port binding), so nothing here is BLOCKED. Server-only items are under UNVERIFIED. Every reworked statement I could execute matched what I observed, except one cosmetic nit (N1) that does not block a merge.
 
 Setup
-- Worktree: /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t6.
+- Worktree: ~/Work/src/extra/himanshu-sao/claude-code-proxy/.claude/worktrees/003-t6.
 - Python: the venv python (3.14), used in place of the docs' `python3` and `uv run`. `OPENAI_API_KEY=test-key`.
 - Scratch files only under $TMPDIR (/tmp/claude-501/...). The real logs/auto_signal.log was never created: `ls logs` shows only proxy.log. The tracked model_contexts_cache.json is unchanged (sha1 54271441ec43016e1a484114c0de8f853ffa59cd before and after).
 - `python -c "import src; print(src.__file__)"` resolves to the worktree's src/__init__.py.

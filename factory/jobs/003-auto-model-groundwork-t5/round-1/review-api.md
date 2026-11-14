@@ -3,7 +3,7 @@ VERDICT: PASS
 Role: api-tester, behavioural verification, in-process only (no port bound, no uvicorn). I drove the real FastAPI app (`src.main:app`) with `fastapi.testclient.TestClient` (starlette 0.46.2, fastapi 0.115.13) from plain python processes. Everything below is what I observed, not what the spec predicts.
 
 ## Setup (exact)
-- `OPENAI_API_KEY=test-key /Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src; print(src.__file__)"` printed `.../claude-code-proxy/.claude/worktrees/003-t5/src/__init__.py`, which is inside the worktree. Each harness also asserts this.
+- `OPENAI_API_KEY=test-key ~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src; print(src.__file__)"` printed `.../claude-code-proxy/.claude/worktrees/003-t5/src/__init__.py`, which is inside the worktree. Each harness also asserts this.
 - Harness files are under `/tmp/claude-501/t5/` (`h.py` is shared, `c1.py` to `c8.py` are the checks), run as `.venv/bin/python -I cN.py`. Scratch logs are under `/tmp/claude-501/t5/scratch/`.
 - Upstream is stubbed like `tests/test_endpoints.py`: `config.get_next_client` and `get_next_client_async` return a stub client, and `endpoints._write_last_model` records calls. `config.anthropic_api_key=None` except in check 4.
 - The signal log is redirected by `signal_log._log_path = lambda: <scratch>` plus `signal_log.reset_for_tests()`.

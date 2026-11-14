@@ -3,7 +3,7 @@ VERDICT: PASS
 Scope note: T3 does not wire emit_signal into /v1/messages (that is T5), so there is no HTTP surface to hit. No server was started. I verified the module and analyzer from plain python processes instead.
 
 Setup (all runs from the worktree):
-- PY=/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python, PYTHONPATH=<worktree>, OPENAI_API_KEY=test-key, AUTO_SIGNAL_LOG=1.
+- PY=~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python, PYTHONPATH=<worktree>, OPENAI_API_KEY=test-key, AUTO_SIGNAL_LOG=1.
 - `python -c "import src; print(src.__file__)"` printed `<worktree>/src/__init__.py`.
 - Driver scripts and scratch logs are under $TMPDIR/t3api/ (/tmp/claude-501/t3api), outside the repo.
 - `_log_path` was monkeypatched to a scratch dir, as the tests do. A wrapper (run.py) did this via runpy.

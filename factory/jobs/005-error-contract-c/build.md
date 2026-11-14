@@ -34,7 +34,7 @@ I removed only the `@pytest.mark.xfail(strict=True, reason=...)` decorator on `t
 Slice D keeps G4, G6, G12, the mid-stream tests and the byte-identical fixture.
 
 ## Commands and results
-`V=/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python`, run from the worktree.
+`V=~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python`, run from the worktree.
 - Venv check: `import src` resolves to `.../.claude/worktrees/005-c/src`.
 - Baseline before edits: `tests/ --ignore=tests/test_main.py` gave 494 passed, 4 xfailed.
 - Final full suite: `OPENAI_API_KEY=test-key $V -m pytest tests/ --ignore=tests/test_main.py -p no:cacheprovider -q -rxX` gave 560 passed, 0 xfailed, 0 XPASS.

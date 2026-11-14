@@ -8,7 +8,7 @@
 
 - T1 (exhausted keys 429 + Retry-After + async getter + import-time client removal) and T2 (proxy.log append) are ALREADY DONE and merged into `feat/virtual-auto-model` at 67de01a. Branch `factory/005-error-contract` is cut from that commit. They are not sub-jobs; keep their tests as regression only.
 - `config.seconds_until_key_available()` already exists in `src/core/config.py` and is used by endpoints.py for our own Retry-After.
-- Run all python with the shared venv: `/Users/himanshusao/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest ... -p no:cacheprovider` with `OPENAI_API_KEY=test-key`, from the job's worktree. Offline suite command: `tests/ --ignore=tests/test_main.py` (baseline 377 passed, 4 xfailed). Never run tests from the main checkout (importing src.core.logging touches logs/).
+- Run all python with the shared venv: `~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -m pytest ... -p no:cacheprovider` with `OPENAI_API_KEY=test-key`, from the job's worktree. Offline suite command: `tests/ --ignore=tests/test_main.py` (baseline 377 passed, 4 xfailed). Never run tests from the main checkout (importing src.core.logging touches logs/).
 
 # Size gate decision (user, 2026-11-13)
 - 005-error-contract-b: the SIZE WARNING (4 files, 11 criteria) is accepted. Proceed to build as specified.

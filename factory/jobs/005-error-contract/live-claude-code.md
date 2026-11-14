@@ -4,7 +4,7 @@ Every case behaved as the error contract intends, with one caveat on cases 7 and
 
 ## Setup
 
-- CLI: `/Users/himanshusao/.local/bin/claude`, version `2.1.323 (Claude Code)`.
+- CLI: `~/.local/bin/claude`, version `2.1.323 (Claude Code)`.
 - Invocation: `claude -p "Reply with the single word hello" --output-format json|text < /dev/null` run from the scratch directory `/tmp/claude-501/cc-live/work/`.
 - Environment for each run: `ANTHROPIC_BASE_URL=http://127.0.0.1:8794 ANTHROPIC_API_KEY=fake-client-key CLAUDE_CODE_MAX_RETRIES=2`.
 - Two additions to the requested command:
