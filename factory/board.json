@@ -42,8 +42,8 @@
         "code": "pending",
         "api": "pending"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-13T13:20:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T04:10:00"
     },
     {
       "id": "003-auto-model-groundwork-t1",

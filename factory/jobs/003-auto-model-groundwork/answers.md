@@ -189,3 +189,17 @@ Nothing has been written to `model_contexts_cache.json` yet. Neither model is cu
   `output_config` as a field and T3 read it only from `model_extra`; no single-branch review could see it, and it cost an extra review round.
 - Optional hardening noted by the approvers (not part of job 003): guard the discovery `update()` in `provider_discovery.py` so provider metadata cannot
   overwrite curated cache entries; sanitize the client-supplied model name in the request log line (pre-existing log-injection surface).
+
+## Orchestrator note after the final whole-job pass (2026-11-14)
+
+The whole-job approver (`decision.md`, APPROVE, nothing required before opening a PR) lists "Python 3.9 at runtime" as UNVERIFIED in several
+places (it only ran a syntax parse). The orchestrator ran it afterwards, so that item is now partly closed:
+
+- The five-file offline suite (`tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py
+  tests/test_signal_log.py`) was run with the system **Python 3.9.6** (not the 3.14 venv) on the final merged tree
+  (`feat/virtual-auto-model` at 342998c) with pytest 8.4.2, FastAPI 0.124.4, pydantic 2.12.5, Starlette 0.49.3: **214 passed**, and no
+  `logs/auto_signal.log` was created.
+- NOT run on 3.9: the broader `tests/ --ignore=tests/test_main.py` run (239) and the old three-file command (111); any real server;
+  `uv run` forms. 3.10 to 3.13 were not exercised except 3.11 and 3.12 exist on this machine and were not used.
+- So "Python 3.9 at runtime" should read: offline suite passes on 3.9.6 with those dependency versions; everything live remains unverified.
+  Dependency versions on 3.9 may differ from what a fresh `uv sync` would install.
