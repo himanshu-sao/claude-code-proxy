@@ -1,0 +1,35 @@
+# Never send secrets, local state or VCS data into the image build context.
+# The Dockerfile uses `ADD . /app`, so anything not listed here is copied into the image.
+.env
+.env.*
+!.env.example
+
+# VCS and tooling
+.git
+.gitignore
+.github
+.claude
+.vscode
+.idea
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local runtime state (logs can hold request metadata; the signal log is private)
+logs/
+*.log
+.proxy.pid
+
+# Build outputs and agent/factory working files
+build/
+dist/
+*.spec
+factory/
+*.md.bak
+
+# Local scratch
+.DS_Store
