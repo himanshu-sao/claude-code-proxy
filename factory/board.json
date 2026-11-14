@@ -155,6 +155,114 @@
       },
       "decision": "APPROVE",
       "updatedAt": "2026-11-14T03:20:00"
+    },
+    {
+      "id": "005-error-contract",
+      "feature": "One error contract: Anthropic-shaped errors with real upstream status, forwarded retry headers, pre-first-byte stream failures, mid-stream event: error, shared error mapping, STREAM_MAX_RETRIES",
+      "branch": "factory/005-error-contract",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 0,
+      "parent": null,
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T11:52:55"
+    },
+    {
+      "id": "005-error-contract-a",
+      "feature": "Shared error mapping and client refactor",
+      "branch": "factory/005-error-contract-a",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 2,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:50:48"
+    },
+    {
+      "id": "005-error-contract-b",
+      "feature": "STREAM_MAX_RETRIES config and docs",
+      "branch": "factory/005-error-contract-b",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:50:48"
+    },
+    {
+      "id": "005-error-contract-c",
+      "feature": "Endpoints: non-stream errors and pre-first-byte stream",
+      "branch": "factory/005-error-contract-c",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [
+        "005-error-contract-a",
+        "005-error-contract-b"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T00:12:41"
+    },
+    {
+      "id": "005-error-contract-d",
+      "feature": "Mid-stream error event and xfail cleanup",
+      "branch": "factory/005-error-contract-d",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 2,
+      "parent": "005-error-contract",
+      "depends": [
+        "005-error-contract-a",
+        "005-error-contract-c"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T00:30:46"
+    },
+    {
+      "id": "005-error-contract-e",
+      "feature": "Whole-job review fixes: 3.9 test errors, truncated-stream error, lone-surrogate safety",
+      "branch": "factory/005-error-contract-e",
+      "kind": "feature",
+      "stage": "review",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T11:55:44"
     }
   ]
 }

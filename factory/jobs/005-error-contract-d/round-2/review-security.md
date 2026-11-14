@@ -1,0 +1,7 @@
+VERDICT: PASS
+
+- src unchanged: `git diff --stat 50c2be1 factory/005-error-contract-d -- src` printed nothing, and the branch tip is 1e99bd1. The round-1 findings and PoCs still hold, so I did not re-run them. The only files changed are QUICKSTART.md and tests/test_midstream_errors.py.
+- The QUICKSTART.md "Errors" claims are accurate. On the branch, `validate_api_key` (endpoints.py:75-95) raises `HTTPException(401, detail=...)`. It runs as a `Depends` outside the `create_message` try/except, so the handler at endpoints.py:278 never wraps it. src/main.py has no custom exception handlers, so FastAPI's default `{"detail": ...}` applies to the 401. The same default gives 422 for body validation errors. The text makes no claim about auth strength. The new line says Claude Code's display of mid-stream errors is unverified and that the HTTP status is already 200, and both are honest.
+- The new tests add no key-like literals. They use only `upstream.invalid`, the strings "down" and "hi", and a 503 status. They add no new dependencies. The added import is the in-repo `UpstreamHTTPError`.
+- The two new assertions strengthen the 499 and `UpstreamHTTPError` mid-stream behaviour. That behaviour is the one-error-event, no-`message_stop` handling I verified in round 1. They add no new attack surface.
+- Round-1 informational items are unchanged and still not blocking. The catch-all at response_converter.py:397 logs a traceback that can include a chained cause. A lone surrogate in an upstream message can abort the stream.
