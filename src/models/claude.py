@@ -92,7 +92,11 @@ class ClaudeMessagesRequest(BaseModel):
     thinking: Optional[ClaudeThinkingConfig] = None
     # Claude Code 2.1.x sends xhigh for its top effort level; the proxy
     # normalizes it to the canonical "max" in conversion/effort_mapper.py.
-    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh"]] = None
+    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+    # Anthropic's documented effort carrier (``output_config.effort``). Typed as
+    # Any so a malformed value can never fail validation; effort_mapper
+    # .resolve_client_effort treats anything unusable as absent.
+    output_config: Optional[Any] = None
 
 
 class ClaudeTokenCountRequest(BaseModel):

@@ -4,6 +4,7 @@ import uuid
 from fastapi import HTTPException, Request
 
 from src.core.constants import Constants
+from src.core.errors import UpstreamError, error_json
 from src.core.logging import redact_brief, safe_error_summary
 from src.models.claude import ClaudeMessagesRequest
 
@@ -364,6 +365,15 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                         else:
                             final_stop_reason = Constants.STOP_END_TURN
 
+    except UpstreamError as e:
+        # Must precede HTTPException: UpstreamHTTPError is both. The client already accounted
+        # for this failure once, so do not report it again. The error event is terminal: no
+        # content_block_stop, message_delta or message_stop follows it.
+        logger.error(
+            "Mid-stream upstream error: status=%s type=%s", e.mapped.status, e.mapped.error_type
+        )
+        yield f"event: error\ndata: {error_json(e.mapped.error_type, e.mapped.message)}\n\n"
+        return
     except HTTPException as e:
         # Handle cancellation
         if e.status_code == 499:
@@ -385,14 +395,10 @@ async def convert_openai_streaming_to_claude_with_cancellation(
         import traceback
 
         logger.error(traceback.format_exc())
-        error_event = {
-            "type": "error",
-            "error": {
-                "type": "api_error",
-                "message": f"Streaming error: {safe_error_summary(e)}",
-            },
-        }
-        yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+        yield (
+            "event: error\ndata: "
+            f"{error_json('api_error', f'Streaming error: {type(e).__name__}')}\n\n"
+        )
         return
 
     # Send final SSE events

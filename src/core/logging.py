@@ -52,8 +52,8 @@ _console_handler.setLevel(getattr(logging, _LOG_LEVEL))
 _console_handler.setFormatter(logging.Formatter(_FORMAT, _DATE_FMT))
 _root_logger.addHandler(_console_handler)
 
-# File handler - overwrite mode (w = write, not append)
-_file_handler = logging.FileHandler(_log_file, mode="w", encoding="utf-8")
+# File handler - append mode, so importing this module never truncates history
+_file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
 _file_handler.setLevel(getattr(logging, _LOG_LEVEL))
 _file_handler.setFormatter(logging.Formatter(_FORMAT, _DATE_FMT))
 _root_logger.addHandler(_file_handler)
@@ -108,8 +108,8 @@ def safe_error_summary(exc: BaseException) -> str:
 
     ``str(exc)`` is avoided because OpenAI SDK error messages frequently embed
     the rejected request body or streamed content. Callers that need a
-    user-facing message should resolve one via :func:`classify_openai_error`
-    style helpers, not from this summary.
+    user-facing message should resolve one via :func:`src.core.errors.map_upstream_error`,
+    not from this summary.
     """
     status = getattr(exc, "status_code", None)
     if status is not None:

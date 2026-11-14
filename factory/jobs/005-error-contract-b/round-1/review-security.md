@@ -1,0 +1,8 @@
+VERDICT: PASS
+
+Reviewed `git diff 67de01a factory/005-error-contract-b` (commit 9485bb4): src/core/config.py, .env.example, README.md, tests/test_config.py.
+
+- Log content (src/core/config.py, `_parse_stream_max_retries`, the two `_log.warning` calls): the raw value is logged with `%r`. `STREAM_MAX_RETRIES` is a non-secret integer tuning knob, so logging it is acceptable. `%r` escapes newlines and control characters, so there is no log injection. The only thing that could appear is whatever the operator typed into this one variable. No API keys, base URLs or headers are logged. Severity: none.
+- Startup safety: an unset or blank value returns 0 before any parsing. `int()` raises only `ValueError` for non-numeric input (`abc`, `1.5`, `true`) and for over-long digit strings under Python's int-digit limit, and `ValueError` is caught. Negative values are clamped. A `None` value cannot occur, because `os.environ.get` uses a `""` default. No startup crash path found. Severity: none.
+- Upper bound (informational, low): a very large valid integer such as 1000000 is passed to the SDK `max_retries` unchanged. Only the operator controls this env var, and `MAX_RETRIES` has the same property, so it is not a vulnerability. Capping it would be optional hardening.
+- Injection, auth and dependencies: no new dependencies. No secrets in code, docs or tests, since the only key-like value is the dummy `test-key`. The getter change only swaps which integer is passed to the client, and key rotation and RPM logic are untouched. `stream` is keyword-only and defaults to False, so existing callers keep the non-stream budget. The default of 0 for streams reduces upstream retry amplification. The docs match the spec.

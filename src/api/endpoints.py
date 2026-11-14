@@ -1,5 +1,7 @@
+import asyncio
 import os
 import time
+import traceback
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -12,8 +14,10 @@ from src.conversion.response_converter import (
     convert_openai_streaming_to_claude_with_cancellation,
     convert_openai_to_claude_response,
 )
+from src.core import signal_log
 from src.core.client import OpenAIClient
 from src.core.config import config
+from src.core.errors import UpstreamError, error_envelope, error_type_for_status
 from src.core.logging import logger
 from src.core.model_manager import model_manager
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
@@ -50,10 +54,22 @@ def _write_last_model(tier: str, model: str) -> None:
         logger.debug("Failed to write .last_model: %s", exc)
 
 
-# Global client for compatibility; each request may obtain a fresh client via config.
-openai_client = config.get_next_client()
+def _emit_signal_safe(request: ClaudeMessagesRequest, http_request: Request) -> None:
+    """Append the content-free signal record; nothing here may reach the response.
 
-# No global OpenAI client; each request obtains a client from config to enable round‑robin provider selection.
+    emit_signal swallows its own failures, but its arguments are evaluated before it is
+    entered, so they are evaluated inside this guard too. No-op unless AUTO_SIGNAL_LOG is on.
+    """
+    try:
+        signal_log.emit_signal(
+            request, http_request.headers, model_manager.is_auto_alias(request.model)
+        )
+    except Exception as exc:  # noqa: BLE001 — the signal log must never break a request
+        logger.debug("signal log skipped: %s", type(exc).__name__)
+
+
+# No global OpenAI client: each request obtains one from config (round-robin across keys).
+# Note: config.get_next_client() is the blocking variant; never call it from async handlers.
 
 
 async def validate_api_key(
@@ -80,26 +96,117 @@ async def validate_api_key(
         )
 
 
+FIRST_CHUNK_POLL_SECONDS = 0.25
+
+
+class _ClientGone(Exception):
+    """The client disconnected while we waited for the first upstream chunk."""
+
+
+def _error_response(
+    status: int, error_type: str, message: str, headers: Optional[dict] = None
+) -> JSONResponse:
+    """Anthropic-envelope error with a real HTTP status."""
+    return JSONResponse(
+        status_code=status,
+        content=error_envelope(error_type, message),
+        headers=headers or None,
+    )
+
+
+def _mapped_response(mapped) -> JSONResponse:
+    """Render a MappedError; its headers were already filtered and sanitised by the mapper."""
+    return _error_response(mapped.status, mapped.error_type, mapped.message, mapped.headers)
+
+
+def _exhausted_response() -> JSONResponse:
+    """Our own 429 when every local key is over its RPM limit or cooling down."""
+    retry_after = max(1, min(60, int(config.seconds_until_key_available())))
+    return _error_response(
+        429,
+        "rate_limit_error",
+        "All API keys exhausted. Please wait before trying again.",
+        {"Retry-After": str(retry_after)},
+    )
+
+
+async def _prepend(first, gen):
+    """Yield the already-read first chunk, then the rest of ``gen``; always close ``gen``."""
+    try:
+        yield first
+        async for item in gen:
+            yield item
+    finally:
+        await gen.aclose()
+
+
+async def _empty():
+    return
+    yield  # pragma: no cover - makes this an async generator
+
+
+async def _await_first_chunk(gen, http_request, client, request_id):
+    """Read the first chunk of ``gen`` before any response byte is sent.
+
+    The upstream call happens on the first ``__anext__``. Upstream failures re-raise unchanged
+    (UpstreamError) and an empty stream raises StopAsyncIteration. There is no extra timer: a
+    hang is bounded by the SDK's REQUEST_TIMEOUT, which surfaces as a mapped 500. While waiting,
+    a client disconnect cancels the upstream call and raises _ClientGone.
+    """
+    task = asyncio.ensure_future(gen.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=FIRST_CHUNK_POLL_SECONDS)
+            if done:
+                return task.result()
+            if await http_request.is_disconnected():
+                client.cancel_request(request_id)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                await gen.aclose()
+                client.active_requests.pop(request_id, None)
+                raise _ClientGone()
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 - already unwinding; drop the task's outcome
+                pass
+        try:
+            await gen.aclose()
+        except BaseException:  # noqa: BLE001
+            pass
+        client.active_requests.pop(request_id, None)
+        raise
+
+
 @router.post("/v1/messages")
 async def create_message(
     request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)
 ):
+    request_id = str(uuid.uuid4())
     try:
-        # Generate unique request ID for cancellation tracking
-        request_id = str(uuid.uuid4())
-
         # Map Claude model to OpenAI model and tier
         openai_model, model_tier = model_manager.map_claude_model_to_openai(request.model)
 
         # Log incoming request with model info
         logger.info(
-            "Request [%s] model=%s -> %s (tier=%s, stream=%s)",
+            "Request [%s] model=%s -> %s (tier=%s, stream=%s, reason=%s)",
             request_id[:8],
             request.model,
             openai_model,
             model_tier,
             request.stream,
+            "auto-placeholder" if model_manager.is_auto_alias(request.model) else "tier-map",
         )
+
+        # Content-free signal record (opt-in via AUTO_SIGNAL_LOG). Called once, above the
+        # stream/non-stream split; runs inline because it is a no-op unless enabled.
+        _emit_signal_safe(request, http_request)
 
         # Convert Claude request to OpenAI format
         openai_request = convert_claude_to_openai(request, model_manager)
@@ -120,69 +227,64 @@ async def create_message(
             _write_last_model(model_tier or "unknown", openai_model)
 
         if request.stream:
-            # Streaming response - wrap in error handling
+            client = await config.get_next_client_async(stream=True)
+            if client is None:
+                return _exhausted_response()
+            gen = client.create_chat_completion_stream(openai_request, request_id, model_tier)
             try:
-                client = await config.get_next_client_async()
-                if client is None:
-                    # All API keys exhausted - return 429
-                    raise HTTPException(
-                        status_code=429,
-                        detail="All API keys exhausted. Please wait before trying again.",
-                    )
-                openai_stream = client.create_chat_completion_stream(
-                    openai_request, request_id, model_tier
-                )
-                return StreamingResponse(
-                    convert_openai_streaming_to_claude_with_cancellation(
-                        openai_stream,
-                        request,
-                        logger,
-                        http_request,
-                        client,
-                        request_id,
-                    ),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Headers": "*",
-                    },
-                )
-            except Exception as e:
-                # Log unexpected errors (API errors are now yielded as events in the stream)
-                logger.error(f"Unexpected streaming error: {e}")
-                import traceback
+                first = await _await_first_chunk(gen, http_request, client, request_id)
+                stream_source = _prepend(first, gen)
+            except StopAsyncIteration:
+                stream_source = _empty()
+            return StreamingResponse(
+                convert_openai_streaming_to_claude_with_cancellation(
+                    stream_source,
+                    request,
+                    logger,
+                    http_request,
+                    client,
+                    request_id,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
 
-                logger.error(traceback.format_exc())
-        else:
-            # Non-streaming response
-            client = config.get_next_client()
-            try:
-                openai_response = await client.create_chat_completion(
-                    openai_request, request_id, model_tier
-                )
-                claude_response = convert_openai_to_claude_response(openai_response, request)
-                return claude_response
-            except HTTPException as e:
-                # Re-raise HTTP exceptions as-is (client already reported the error)
-                raise
-            except Exception as e:
-                # Log the error and re-raise (client already reported the error)
-                logger.error(f"Non-streaming request failed: {e}")
-                raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-
-        logger.error(f"Unexpected error processing request: {e}")
+        # Non-streaming response
+        client = await config.get_next_client_async()
+        if client is None:
+            return _exhausted_response()
+        openai_response = await client.create_chat_completion(
+            openai_request, request_id, model_tier
+        )
+        return convert_openai_to_claude_response(openai_response, request)
+    except UpstreamError as e:
+        # UpstreamHTTPError is also an HTTPException, so this must stay first. The client
+        # already reported the failure to config, exactly once.
+        logger.info(
+            "Request [%s] failed: status=%s type=%s",
+            request_id[:8],
+            e.mapped.status,
+            e.mapped.error_type,
+        )
+        return _mapped_response(e.mapped)
+    except _ClientGone:
+        logger.info("Request [%s] client disconnected before first chunk", request_id[:8])
+        return _error_response(499, "api_error", "Client disconnected")
+    except HTTPException as e:
+        error_type = error_type_for_status(e.status_code)
+        logger.info(
+            "Request [%s] failed: status=%s type=%s", request_id[:8], e.status_code, error_type
+        )
+        return _error_response(e.status_code, error_type, str(e.detail), e.headers)
+    except Exception:
+        logger.error("Unexpected error processing request [%s]", request_id[:8])
         logger.error(traceback.format_exc())
-        # Reuse the same client if available, otherwise get a new one
-        # (In practice, 'client' should be available from the try block above)
-        # But to be safe, we'll try to get it from the failed request context
-        error_message = "Internal server error"
-        raise HTTPException(status_code=500, detail=error_message)
+        return _error_response(500, "api_error", "Internal server error")
 
 
 @router.post("/v1/messages/count_tokens")
@@ -218,9 +320,10 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 
         return {"input_tokens": estimated_tokens}
 
-    except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text can echo request content or upstream detail; keep it in the server log only.
+        logger.exception("Error counting tokens")
+        raise HTTPException(status_code=500, detail="Token counting failed")
 
 
 @router.get("/health")
@@ -229,7 +332,9 @@ async def health_check():
     # Get current RPM stats
     now = time.time()
     rpm_info = []
-    for api_key, usage in config._provider_usage.items():
+    # Keys are identified by their 1-based position in OPENAI_API_KEY, never by any part of the
+    # key itself: /health is unauthenticated, and even a prefix narrows a key.
+    for key_index, (api_key, usage) in enumerate(config._provider_usage.items(), start=1):
         # Reset expired windows
         if now - usage["window_start"] >= 60:
             current_count = 0
@@ -243,7 +348,7 @@ async def health_check():
 
         rpm_info.append(
             {
-                "key_prefix": api_key[:8] + "..." if len(api_key) > 8 else api_key,
+                "key_index": key_index,
                 "requests_this_minute": current_count,
                 "rpm_limit": config._rpm_limit,
                 "percentage_used": (
@@ -272,7 +377,9 @@ async def test_connection():
     """Test API connectivity to OpenAI"""
     try:
         # Simple test request to verify API connectivity
-        client = config.get_next_client()
+        client = await config.get_next_client_async()
+        if client is None:
+            raise RuntimeError("All API keys have reached their RPM limit or are under penalty.")
         test_response = await client.create_chat_completion(
             {
                 "model": config.small_model,
@@ -290,13 +397,14 @@ async def test_connection():
         }
 
     except Exception as e:
-        logger.error(f"API connectivity test failed: {e}")
+        # Log the detail server-side only: upstream text can echo keys or request content.
+        logger.error("API connectivity test failed: %s", type(e).__name__)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "failed",
                 "error_type": "API Error",
-                "message": str(e),
+                "message": "Upstream connectivity check failed; see the proxy log for the error type",
                 "timestamp": datetime.now().isoformat(),
                 "suggestions": [
                     "Check your OPENAI_API_KEY is valid",
@@ -311,9 +419,11 @@ async def test_connection():
 async def list_models():
     """List available models in Anthropic and OpenAI dual-compatible format.
 
-    Exposes exactly one alias per tier (opus/sonnet/haiku). The alias the client
-    picks is irrelevant — model_manager routes it to the active model for that
-    tier, as configured via BIG/MIDDLE/SMALL_MODEL in .env.
+    Exposes one alias per tier (opus/sonnet/haiku), plus an optional virtual auto
+    alias (AUTO_MODEL_ALIAS) unless AUTO_MODEL_ENABLED is false. The alias the client
+    picks is irrelevant for the tier aliases — model_manager routes it to the active
+    model for that tier, as configured via BIG/MIDDLE/SMALL_MODEL in .env. The auto
+    alias currently resolves to the BIG tier.
     """
     now_ts = int(time.time())
     now_iso = datetime.now().isoformat()
@@ -339,6 +449,16 @@ async def list_models():
             "created": 1729555200,
         },
     ]
+
+    if config.auto_model_enabled:
+        claude_models.append(
+            {
+                "id": config.auto_model_alias,
+                "display_name": "Auto (routes to big tier)",
+                "created_at": "2025-01-01T00:00:00Z",
+                "created": 1735689600,
+            }
+        )
 
     data = [
         {

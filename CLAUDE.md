@@ -9,7 +9,8 @@ upstreams, so Claude Code can run against any OpenAI-compatible provider.
 uv run claude-code-proxy          # run the server (default :8082)
 ./start.sh / ./stop.sh / ./restart.sh
 uv run pytest tests/              # full suite (live-integration tests need the proxy running on :8082)
-uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py   # offline unit tests
+uv run pytest tests/ --ignore=tests/test_main.py   # offline suite, no server needed (600 tests)
+uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py tests/test_signal_log.py   # quick offline subset (214 tests)
 uv run black src/ && uv run isort src/
 ```
 

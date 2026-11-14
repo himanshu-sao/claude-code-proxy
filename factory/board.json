@@ -27,6 +27,242 @@
       },
       "decision": "pending",
       "updatedAt": "2026-10-12T14:00:00"
+    },
+    {
+      "id": "003-auto-model-groundwork",
+      "feature": "Virtual auto model groundwork: claude-proxy-auto alias + /v1/models entry, effort max/output_config handling, content-free signal log, context-window data fixes, docs",
+      "branch": "factory/003-auto-model-groundwork",
+      "kind": "feature",
+      "stage": "decomposed",
+      "round": 0,
+      "parent": null,
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T04:10:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t1",
+      "feature": "[003 T1] alias + /v1/models entry",
+      "branch": "factory/003-auto-model-groundwork-t1",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T20:40:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t2",
+      "feature": "[003 T2] effort max + output_config.effort",
+      "branch": "factory/003-auto-model-groundwork-t2",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T20:40:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t3",
+      "feature": "[003 T3] content-free signal log module + analysis script",
+      "branch": "factory/003-auto-model-groundwork-t3",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 4,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T20:40:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t4",
+      "feature": "[003 T4] context-window cache entries for two MIDDLE models",
+      "branch": "factory/003-auto-model-groundwork-t4",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "003-auto-model-groundwork",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "BLOCKED"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T20:40:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t5",
+      "feature": "[003 T5] wire signal log into /v1/messages",
+      "branch": "factory/003-auto-model-groundwork-t5",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "003-auto-model-groundwork",
+      "depends": [
+        "003-auto-model-groundwork-t1",
+        "003-auto-model-groundwork-t3"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:20:00"
+    },
+    {
+      "id": "003-auto-model-groundwork-t6",
+      "feature": "[003 T6] docs and .env.example",
+      "branch": "factory/003-auto-model-groundwork-t6",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 2,
+      "parent": "003-auto-model-groundwork",
+      "depends": [
+        "003-auto-model-groundwork-t1",
+        "003-auto-model-groundwork-t2",
+        "003-auto-model-groundwork-t3",
+        "003-auto-model-groundwork-t4",
+        "003-auto-model-groundwork-t5"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "CHANGES",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T03:20:00"
+    },
+    {
+      "id": "005-error-contract",
+      "feature": "One error contract: Anthropic-shaped errors with real upstream status, forwarded retry headers, pre-first-byte stream failures, mid-stream event: error, shared error mapping, STREAM_MAX_RETRIES",
+      "branch": "factory/005-error-contract",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 0,
+      "parent": null,
+      "depends": [],
+      "reviews": {
+        "security": "pending",
+        "code": "pending",
+        "api": "pending"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T11:52:55"
+    },
+    {
+      "id": "005-error-contract-a",
+      "feature": "Shared error mapping and client refactor",
+      "branch": "factory/005-error-contract-a",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 2,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:50:48"
+    },
+    {
+      "id": "005-error-contract-b",
+      "feature": "STREAM_MAX_RETRIES config and docs",
+      "branch": "factory/005-error-contract-b",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-13T23:50:48"
+    },
+    {
+      "id": "005-error-contract-c",
+      "feature": "Endpoints: non-stream errors and pre-first-byte stream",
+      "branch": "factory/005-error-contract-c",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [
+        "005-error-contract-a",
+        "005-error-contract-b"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T00:12:41"
+    },
+    {
+      "id": "005-error-contract-d",
+      "feature": "Mid-stream error event and xfail cleanup",
+      "branch": "factory/005-error-contract-d",
+      "kind": "feature",
+      "stage": "merged",
+      "round": 2,
+      "parent": "005-error-contract",
+      "depends": [
+        "005-error-contract-a",
+        "005-error-contract-c"
+      ],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T00:30:46"
+    },
+    {
+      "id": "005-error-contract-e",
+      "feature": "Whole-job review fixes: 3.9 test errors, truncated-stream error, lone-surrogate safety",
+      "branch": "factory/005-error-contract-e",
+      "kind": "feature",
+      "stage": "review",
+      "round": 1,
+      "parent": "005-error-contract",
+      "depends": [],
+      "reviews": {
+        "security": "PASS",
+        "code": "PASS",
+        "api": "PASS"
+      },
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T11:55:44"
     }
   ]
 }

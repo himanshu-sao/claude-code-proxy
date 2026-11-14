@@ -1,7 +1,9 @@
 """Reasoning-effort routing layer.
 
-Claude Code 2.1.x sends effort as one of ``low | medium | high | xhigh``, but
-each OpenAI-compatible upstream speaks its own envelope and vocabulary:
+Claude Code 2.1.x sends effort as one of ``low | medium | high | xhigh | max``,
+carried in the top-level ``reasoning_effort`` field or in ``output_config.effort``
+(see ``resolve_client_effort``), but each OpenAI-compatible upstream speaks its
+own envelope and vocabulary:
 
 * NVIDIA NIM GLM-5.x: top-level ``reasoning_effort`` string ``low|high|max``.
 * gpt-oss / o-series / kimi-k3 / deepseek-r1: top-level ``reasoning_effort``
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 CANONICAL_EFFORTS = ("low", "medium", "high", "max")
 
 DEFAULT_EFFORT = "high"
+
+# Everything a client may send for effort; "xhigh" is mapped to "max" later by
+# normalize_effort.
+CLIENT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 class EffortSpec:
@@ -61,13 +67,40 @@ class EffortSpec:
         )
 
 
+def resolve_client_effort(reasoning_effort: Any, output_config: Any) -> Optional[str]:
+    """Pick the effort level the client sent, from either carrier field.
+
+    Precedence: top-level ``reasoning_effort`` > ``output_config.effort``.
+    A malformed ``output_config`` (not a dict, ``effort`` not a string, or an
+    unknown level) is treated as absent so the env defaults still apply and the
+    request is never rejected. The unknown-level filter matters: left to
+    ``normalize_effort``, ``"bogus"`` would fall back to ``high`` and silently
+    bypass the env default.
+
+    Returns a lowercase level from ``CLIENT_EFFORTS`` or ``None``.
+    """
+    if reasoning_effort:
+        return reasoning_effort
+    if not isinstance(output_config, dict):
+        return None
+    effort = output_config.get("effort")
+    if not isinstance(effort, str):
+        return None
+    effort = effort.strip().lower()
+    return effort if effort in CLIENT_EFFORTS else None
+
+
 def normalize_effort(claude_value: Optional[str], config_override: Optional[str] = None) -> str:
     """Resolve the canonical effort level for a request.
 
-    Precedence: the value Claude Code sent (from ``/effort``) > the
-    REASONING_EFFORT env default > the built-in default (``high``).
+    ``claude_value`` is the already-resolved client value (from
+    ``resolve_client_effort``: top-level ``reasoning_effort`` >
+    ``output_config.effort``). ``config_override`` is the env default the caller
+    picked (the per-tier ``*_MODEL_EFFORT`` if set, else ``REASONING_EFFORT``).
+    The full precedence is therefore: client value > per-tier env >
+    ``REASONING_EFFORT`` > the built-in default (``high``).
 
-    The env var is intentionally a *default*, not a hard override: in-session
+    The env vars are intentionally *defaults*, not hard overrides: in-session
     ``/effort`` always wins so the level can be changed on the fly without
     restarting the proxy.
 

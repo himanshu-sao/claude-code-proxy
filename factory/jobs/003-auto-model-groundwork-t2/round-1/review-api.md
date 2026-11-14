@@ -1,0 +1,11 @@
+VERDICT: BLOCKED
+
+- Could not run the live HTTP check. The sandbox denied binding a local port, so the fake upstream never started and no scratch proxy was started. Nothing was observed over HTTP, and the effort behaviours below are unverified.
+- Setup that worked: `~/Work/src/extra/himanshu-sao/claude-code-proxy/.venv/bin/python -c "import src; print(src.__file__)"` from the worktree printed `.../claude-code-proxy/.claude/worktrees/003-t2/src/__init__.py`, which is inside the worktree.
+- Command that failed: `$PY $TMPDIR/t2api/fake_upstream.py 8798 $TMPDIR/t2api/req.jsonl`. This is a FastAPI/uvicorn fake `/v1/chat/completions` on 127.0.0.1:8798 that logs request bodies.
+- Exact error: `ERROR:    [Errno 1] error while attempting to bind on address ('127.0.0.1', 8798): [errno 1] operation not permitted`
+- The Bash sandbox has local port binding disabled. Setting `sandbox.network.allowLocalBinding: true` in the settings would allow it. I did not work around it. The fake upstream (port 8798) and the scratch proxy (port 8799) both need local binding.
+- No server is running. The fake upstream exited at bind time, and killing its pid reported "no such process". The worktree is clean apart from this untracked `round-1/` directory. The scratch files `fake_upstream.py` and `launcher.py` are in `/tmp/claude-501/t2api/`, outside the repo.
+- Code read, not a substitute for the live check. In the diff of `src/models/claude.py`, `src/conversion/effort_mapper.py` and `src/conversion/request_converter.py`, the Literal accepts `max` and `output_config` is typed `Any`. `resolve_client_effort` gives top-level precedence, and any non-dict or non-string `effort` or unknown level returns None so the env or built-in default applies. `bogus` at top level still fails the Literal (a pydantic 422).
+- Envelopes per `resolve_effort`: deepseek-v4 nudges medium and max to high. gpt-oss caps max at high. glm-5 nudges medium to high and keeps max.
+- Caveat for the rerun: `src/__init__.py` calls `load_dotenv(override=True)`, and the parent checkout has a `.env` with real settings. `load_dotenv` finds `.env` by walking up from the calling file, so run from a directory where that file is not found, or neutralise `load_dotenv` as `launcher.py` does. Otherwise `BIG_MODEL` and `OPENAI_BASE_URL` will be overridden.

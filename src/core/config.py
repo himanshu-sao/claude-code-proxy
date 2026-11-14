@@ -8,6 +8,15 @@ import time
 
 _log = logging.getLogger("config")
 
+DEFAULT_AUTO_MODEL_ALIAS = "claude-proxy-auto"
+
+
+def parse_auto_enabled(raw) -> bool:
+    """Parse AUTO_MODEL_ENABLED. Unset (None) is true; false/0/no/off/empty is false."""
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("false", "0", "no", "off", "")
+
 
 # Configuration
 class Config:
@@ -53,7 +62,13 @@ class Config:
 
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
-        self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
+        # Passed to the OpenAI SDK client (retries timeouts/connection errors, 408, 409, 429,
+        # >=500). 0 disables retries. Invalid values: a non-integer still raises ValueError at
+        # startup (fail fast, like REQUEST_TIMEOUT); a negative number is clamped to 0.
+        self.max_retries = max(0, int(os.environ.get("MAX_RETRIES", "2")))
+        # Separate retry budget for streamed calls (default 0 so Claude Code's own retry loop
+        # handles transient failures before the first byte). Invalid values never fail startup.
+        self.stream_max_retries = self._parse_stream_max_retries()
 
         # Optional default for reasoning effort. This is a DEFAULT, not an
         # override: when the client (Claude Code) sends reasoning_effort via
@@ -70,6 +85,15 @@ class Config:
         self.big_model_effort = os.environ.get("BIG_MODEL_EFFORT")
         self.middle_model_effort = os.environ.get("MIDDLE_MODEL_EFFORT")
         self.small_model_effort = os.environ.get("SMALL_MODEL_EFFORT")
+
+        # Virtual "auto" model alias. Matched exactly (case-insensitive, whitespace-stripped)
+        # and mapped to the active BIG model. Empty/unset means the default alias. The
+        # original casing is kept for the /v1/models id. AUTO_MODEL_ENABLED=false removes
+        # the /v1/models entry and makes the alias behave like any unknown name.
+        self.auto_model_alias = (
+            os.environ.get("AUTO_MODEL_ALIAS", "").strip() or DEFAULT_AUTO_MODEL_ALIAS
+        )
+        self.auto_model_enabled = parse_auto_enabled(os.environ.get("AUTO_MODEL_ENABLED"))
 
         # --- Multi-model support with fallback (comma-separated) ---
         # Each tier can have a list of models separated by commas.
@@ -180,8 +204,17 @@ class Config:
         penalty_duration = 60  # 60 seconds cooldown
         self._provider_penalties[api_key] = time.time() + penalty_duration
         _log.warning(
-            "Provider %s... reported rate limit. Penalizing for %ds.", api_key[:8], penalty_duration
+            "Provider key #%s reported rate limit. Penalizing for %ds.",
+            self._key_index(api_key),
+            penalty_duration,
         )
+
+    def _key_index(self, api_key: str) -> str:
+        """1-based position of api_key in the configured pool, for logs (never key material)."""
+        for index, provider in enumerate(self.providers, start=1):
+            if provider.get("api_key") == api_key:
+                return str(index)
+        return "?"
 
     def get_next_provider(self):
         """Return the next provider configuration respecting RPM limits.
@@ -218,7 +251,35 @@ class Config:
             "All API keys have reached their RPM limit or are under penalty. Wait before retrying."
         )
 
-    async def get_next_client_async(self):
+    def seconds_until_key_available(self) -> int:
+        """Whole seconds until the soonest RPM window resets, clamped to 1..60.
+
+        Used for the ``Retry-After`` header on our own 429 (all keys exhausted).
+        """
+        now = time.time()
+        remaining = [
+            max(0.0, 60 - (now - usage["window_start"])) for usage in self._provider_usage.values()
+        ]
+        if not remaining:
+            return 60
+        return max(1, min(60, int(min(remaining)) + 1))
+
+    @staticmethod
+    def _parse_stream_max_retries() -> int:
+        raw = os.environ.get("STREAM_MAX_RETRIES", "")
+        if not raw.strip():
+            return 0
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            _log.warning("Invalid STREAM_MAX_RETRIES=%r; using 0", raw)
+            return 0
+        if value < 0:
+            _log.warning("STREAM_MAX_RETRIES=%r is negative; using 0", raw)
+            return 0
+        return value
+
+    async def get_next_client_async(self, *, stream: bool = False):
         """Create an OpenAIClient for the next provider (async, non-blocking).
         If all API keys have reached their RPM limit, returns None so the caller
         can handle backpressure gracefully (e.g., return 429/503 to the client).
@@ -236,6 +297,7 @@ class Config:
             api_key=prov["api_key"],
             base_url=prov["base_url"],
             timeout=self.request_timeout,
+            max_retries=self.stream_max_retries if stream else self.max_retries,
             api_version=self.azure_api_version,
             custom_headers=custom_headers,
         )
@@ -270,6 +332,7 @@ class Config:
             api_key=prov["api_key"],
             base_url=prov["base_url"],
             timeout=self.request_timeout,
+            max_retries=self.max_retries,
             api_version=self.azure_api_version,
             custom_headers=custom_headers,
         )
