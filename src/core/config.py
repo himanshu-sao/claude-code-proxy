@@ -66,6 +66,9 @@ class Config:
         # >=500). 0 disables retries. Invalid values: a non-integer still raises ValueError at
         # startup (fail fast, like REQUEST_TIMEOUT); a negative number is clamped to 0.
         self.max_retries = max(0, int(os.environ.get("MAX_RETRIES", "2")))
+        # Separate retry budget for streamed calls (default 0 so Claude Code's own retry loop
+        # handles transient failures before the first byte). Invalid values never fail startup.
+        self.stream_max_retries = self._parse_stream_max_retries()
 
         # Optional default for reasoning effort. This is a DEFAULT, not an
         # override: when the client (Claude Code) sends reasoning_effort via
@@ -252,7 +255,22 @@ class Config:
             return 60
         return max(1, min(60, int(min(remaining)) + 1))
 
-    async def get_next_client_async(self):
+    @staticmethod
+    def _parse_stream_max_retries() -> int:
+        raw = os.environ.get("STREAM_MAX_RETRIES", "")
+        if not raw.strip():
+            return 0
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            _log.warning("Invalid STREAM_MAX_RETRIES=%r; using 0", raw)
+            return 0
+        if value < 0:
+            _log.warning("STREAM_MAX_RETRIES=%r is negative; using 0", raw)
+            return 0
+        return value
+
+    async def get_next_client_async(self, *, stream: bool = False):
         """Create an OpenAIClient for the next provider (async, non-blocking).
         If all API keys have reached their RPM limit, returns None so the caller
         can handle backpressure gracefully (e.g., return 429/503 to the client).
@@ -270,7 +288,7 @@ class Config:
             api_key=prov["api_key"],
             base_url=prov["base_url"],
             timeout=self.request_timeout,
-            max_retries=self.max_retries,
+            max_retries=self.stream_max_retries if stream else self.max_retries,
             api_version=self.azure_api_version,
             custom_headers=custom_headers,
         )
