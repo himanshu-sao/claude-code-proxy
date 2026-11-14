@@ -62,7 +62,10 @@ class Config:
 
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
-        self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
+        # Passed to the OpenAI SDK client (retries timeouts/connection errors, 408, 409, 429,
+        # >=500). 0 disables retries. Invalid values: a non-integer still raises ValueError at
+        # startup (fail fast, like REQUEST_TIMEOUT); a negative number is clamped to 0.
+        self.max_retries = max(0, int(os.environ.get("MAX_RETRIES", "2")))
 
         # Optional default for reasoning effort. This is a DEFAULT, not an
         # override: when the client (Claude Code) sends reasoning_effort via
@@ -254,6 +257,7 @@ class Config:
             api_key=prov["api_key"],
             base_url=prov["base_url"],
             timeout=self.request_timeout,
+            max_retries=self.max_retries,
             api_version=self.azure_api_version,
             custom_headers=custom_headers,
         )
@@ -288,6 +292,7 @@ class Config:
             api_key=prov["api_key"],
             base_url=prov["base_url"],
             timeout=self.request_timeout,
+            max_retries=self.max_retries,
             api_version=self.azure_api_version,
             custom_headers=custom_headers,
         )

@@ -21,12 +21,14 @@ class OpenAIClient:
         api_key: str,
         base_url: str,
         timeout: int = 90,
+        max_retries: int = 2,
         api_version: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
     ):
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
+        self.max_retries = max_retries
         self.api_version = api_version
         self.custom_headers = custom_headers or {}
         self._last_model: Optional[str] = None
@@ -46,11 +48,16 @@ class OpenAIClient:
                 azure_endpoint=base_url,
                 api_version=api_version,
                 timeout=timeout,
+                max_retries=max_retries,
                 default_headers=all_headers,
             )
         else:
             self.client = AsyncOpenAI(
-                api_key=api_key, base_url=base_url, timeout=timeout, default_headers=all_headers
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                max_retries=max_retries,
+                default_headers=all_headers,
             )
 
     def _track_model(self, request: Dict[str, Any], tier: Optional[str] = None):

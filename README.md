@@ -130,7 +130,7 @@ Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow th
 - `MAX_TOKENS_LIMIT` - Max response tokens (default: `4096`)
 - `MIN_TOKENS_LIMIT` - Min response tokens (default: `100`); raise this (e.g. `4096`) for reasoning models whose thinking consumes output budget
 - `REQUEST_TIMEOUT` - Request timeout in seconds (default: `90`)
-- `MAX_RETRIES` - Retry attempts for failed requests (default: `2`)
+- `MAX_RETRIES` - Extra upstream attempts after a failure (default: `2`, i.e. up to 3 calls). Applies to connection errors/timeouts, 408, 409, 429 and 5xx responses, via the OpenAI SDK; `0` disables retries; negative values are treated as `0`. Each attempt can take up to `REQUEST_TIMEOUT`
 
 **Multi-Key / Multi-Provider:**
 
