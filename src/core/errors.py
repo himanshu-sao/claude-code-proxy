@@ -5,7 +5,7 @@ This module must stay free of ``src.core.config`` / ``src.core.client`` imports 
 
 import json
 import re
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, Dict, Iterable, NamedTuple, Optional
 
 from fastapi import HTTPException
 from openai._exceptions import APIError, AuthenticationError, RateLimitError
@@ -33,7 +33,10 @@ _PROMPT_TOO_LONG_TRIGGERS = (
 
 _FORWARDED_EXACT = ("x-should-retry", "request-id", "x-request-id")
 _FORWARDED_PREFIX = "anthropic-ratelimit-unified-"
-_INTEGER_RE = re.compile(r"^\d+$")
+_RETRY_AFTER_RE = re.compile(r"[0-9]{1,10}", re.ASCII)
+_SAFE_HEADER_RE = re.compile(r"[\x20-\x7e]*", re.ASCII)
+_MAX_HEADER_VALUE_LEN = 256
+MIN_REDACT_KEY_LEN = 8
 
 
 class MappedError(NamedTuple):
@@ -117,15 +120,34 @@ def _forwarded_headers(exc: BaseException) -> Dict[str, str]:
         key = str(name).lower()
         value = str(value)
         if key == "retry-after":
-            if _INTEGER_RE.match(value.strip()):
+            if _RETRY_AFTER_RE.fullmatch(value.strip()):
                 out[key] = value.strip()
         elif key in _FORWARDED_EXACT or key.startswith(_FORWARDED_PREFIX):
-            out[key] = value
+            # Upstream-controlled: keep only printable ASCII so Starlette's latin-1 header
+            # encoding can never fail (and CR/LF can never be smuggled in).
+            if len(value) <= _MAX_HEADER_VALUE_LEN and _SAFE_HEADER_RE.fullmatch(value):
+                out[key] = value
     return out
 
 
-def map_upstream_error(exc: BaseException, api_key: Optional[str] = None) -> MappedError:
-    """Translate an upstream exception into status, Anthropic type, message and headers."""
+def redact_keys(text: str, keys: Iterable[Optional[str]]) -> str:
+    """Replace every occurrence of each key (>= MIN_REDACT_KEY_LEN chars) with ``[redacted]``."""
+    usable = {k for k in keys if isinstance(k, str) and len(k) >= MIN_REDACT_KEY_LEN}
+    for key in sorted(usable, key=len, reverse=True):
+        text = text.replace(key, "[redacted]")
+    return text
+
+
+def map_upstream_error(
+    exc: BaseException,
+    api_key: Optional[str] = None,
+    extra_keys: Iterable[Optional[str]] = (),
+) -> MappedError:
+    """Translate an upstream exception into status, Anthropic type, message and headers.
+
+    ``api_key`` and ``extra_keys`` (for example the whole provider pool) are scrubbed from the
+    message. Keys shorter than MIN_REDACT_KEY_LEN are ignored.
+    """
     if not isinstance(exc, APIError):
         status = 500
         message = "Unexpected error: " + str(exc)
@@ -139,8 +161,7 @@ def map_upstream_error(exc: BaseException, api_key: Optional[str] = None) -> Map
         headers = _forwarded_headers(exc)
         text_for_rule = str(exc)
 
-    if isinstance(api_key, str) and api_key:
-        message = message.replace(api_key, "[redacted]")
+    message = redact_keys(message, [api_key, *extra_keys])
 
     if status in (400, 413) and isinstance(exc, APIError):
         haystack = (message + str(exc)).lower()

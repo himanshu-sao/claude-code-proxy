@@ -15,6 +15,7 @@ from src.core.errors import (
     UpstreamHTTPError,
     counts_as_model_failure,
     map_upstream_error,
+    redact_keys,
 )
 
 _log = logging.getLogger("client")
@@ -86,6 +87,8 @@ class OpenAIClient:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
 
+        completion_task = None
+        cancel_task = None
         try:
             # Create task that can be cancelled
             completion_task = asyncio.create_task(self.client.chat.completions.create(**request))
@@ -124,8 +127,14 @@ class OpenAIClient:
 
         except HTTPException:
             raise
+        except asyncio.CancelledError:
+            # The caller itself was cancelled: do not leave the upstream/wait tasks running
+            for task in (completion_task, cancel_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            raise
         except Exception as e:
-            raise UpstreamHTTPError(self._handle_upstream_exception(e)) from e
+            raise UpstreamHTTPError(self._handle_upstream_exception(e)) from None
 
         finally:
             # Clean up active request tracking
@@ -178,7 +187,7 @@ class OpenAIClient:
         except UpstreamError:
             raise
         except Exception as e:
-            raise UpstreamError(self._handle_upstream_exception(e)) from e
+            raise UpstreamError(self._handle_upstream_exception(e)) from None
 
         finally:
             # Clean up active request tracking
@@ -187,14 +196,21 @@ class OpenAIClient:
 
     def _handle_upstream_exception(self, exc: BaseException) -> MappedError:
         """Map an upstream failure and do the accounting (once per client call)."""
-        mapped = map_upstream_error(exc, self.api_key)
+        mapped = map_upstream_error(exc, self.api_key, self._pool_keys())
         self._report_model_error(mapped.status, str(exc))
         if isinstance(exc, RateLimitError):
             config.report_rate_limit(self.api_key)
         return mapped
 
+    def _pool_keys(self) -> list:
+        """Every configured provider key, read lazily and defensively (never raises)."""
+        try:
+            return [p.get("api_key") for p in (getattr(config, "providers", None) or [])]
+        except Exception:  # noqa: BLE001 - redaction extras must never break error handling
+            return []
+
     def _redact(self, text: str) -> str:
-        return text.replace(self.api_key, "[redacted]") if self.api_key else text
+        return redact_keys(text, [self.api_key, *self._pool_keys()])
 
     def _report_model_error(self, status_code: int, error_detail: str):
         """Report model errors to config for fallback tracking."""
@@ -210,7 +226,7 @@ class OpenAIClient:
             "Model error [%s] %s: %s (status=%d, model_error=%s)",
             self._last_model_tier.upper(),
             self._last_model,
-            self._redact(str(error_detail))[:100],
+            self._redact(str(error_detail))[:100].replace("\r", "\\r").replace("\n", "\\n"),
             status_code,
             is_model_error,
         )

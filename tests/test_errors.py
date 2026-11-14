@@ -363,3 +363,204 @@ async def test_model_fallback_switch_mid_sequence(monkeypatch, stream):
         if len(reported) == 3:
             assert cfg.get_active_model("big") == "b"
     assert reported == ["a", "a", "a", "b"]
+
+
+# --- round 1 rework --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["٣", "5٣", "12345678901", "1 2", "+5", "５"])
+def test_retry_after_strict_ascii_digits(value):
+    m = map_upstream_error(_err(429, headers={"retry-after": value.encode("utf-8")}))
+    assert "retry-after" not in m.headers
+
+
+def test_retry_after_surrounding_whitespace_stripped():
+    assert map_upstream_error(_err(429, headers={"retry-after": " 5\n"})).headers == {
+        "retry-after": "5"
+    }
+
+
+def test_retry_after_ten_digits_kept():
+    assert map_upstream_error(_err(429, headers={"retry-after": "1234567890"})).headers == {
+        "retry-after": "1234567890"
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [b"r\xe2\x82\xac", b"caf\xc3\xa9", b"a\x7fb", b"a\x01b", b"x" * 257],
+    ids=["euro", "e-acute", "del", "ctrl", "too-long"],
+)
+@pytest.mark.parametrize("name", ["x-request-id", "request-id", "x-should-retry"])
+def test_unsafe_forwarded_header_values_dropped(name, value):
+    assert map_upstream_error(_err(503, headers={name: value})).headers == {}
+
+
+def test_unsafe_ratelimit_header_dropped_and_boundary_kept():
+    ok = "x" * 256
+    m = map_upstream_error(
+        _err(
+            503,
+            headers={
+                "anthropic-ratelimit-unified-status": b"\xe2\x82\xac",
+                "anthropic-ratelimit-unified-reset": ok,
+            },
+        )
+    )
+    assert m.headers == {"anthropic-ratelimit-unified-reset": ok}
+
+
+def test_non_ascii_headers_do_not_break_real_fastapi_response():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    exc = _err(
+        429,
+        "slow down",
+        headers={"retry-after": b"\xd9\xa3", "x-request-id": b"r\xe2\x82\xac", "request-id": "ok1"},
+        cls=RateLimitError,
+    )
+    app = FastAPI()
+
+    @app.get("/boom")
+    async def boom():
+        raise UpstreamHTTPError(map_upstream_error(exc))
+
+    res = TestClient(app, raise_server_exceptions=False).get("/boom")
+    assert res.status_code == 429
+    assert res.json() == {"detail": "slow down"}
+    assert res.headers["request-id"] == "ok1"
+    assert "retry-after" not in res.headers and "x-request-id" not in res.headers
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+async def test_mapped_errors_do_not_chain_raw_exception(monkeypatch, failures, stream):
+    oc = _make_client(monkeypatch, _err(401, "raw secret text", cls=AuthenticationError))
+    with pytest.raises(UpstreamError) as ei:
+        if stream:
+            await _drain(oc.create_chat_completion_stream(dict(REQUEST), None, "big"))
+        else:
+            await oc.create_chat_completion(dict(REQUEST), None, "big")
+    assert ei.value.__cause__ is None
+    assert ei.value.__suppress_context__ is True
+
+
+async def test_log_line_escapes_newlines(monkeypatch, failures, caplog):
+    import logging
+
+    oc = _make_client(monkeypatch, _err(400, "line1\nFORGED | ERROR | x\r\nline3"))
+    with caplog.at_level(logging.WARNING, logger="client"):
+        with pytest.raises(UpstreamError):
+            await oc.create_chat_completion(dict(REQUEST), None, "big")
+    records = [r for r in caplog.records if r.name == "client"]
+    assert len(records) == 1
+    text = records[0].getMessage()
+    assert "\n" not in text and "\r" not in text
+    assert "line1\\nFORGED" in text
+
+
+def test_redact_keys_pool_and_min_length():
+    from src.core.errors import redact_keys
+
+    assert redact_keys("a pool-key-0001 b", ["pool-key-0001"]) == "a [redacted] b"
+    assert redact_keys("x abcdefg y", ["abcdefg"]) == "x abcdefg y"  # 7 chars: skipped
+    assert redact_keys("x abcdefgh y", ["abcdefgh", None, ""]) == "x [redacted] y"
+    m = map_upstream_error(_err(401, "echo other-key-9999"), "fake-key-1234", ["other-key-9999"])
+    assert m.message == "echo [redacted]"
+    short = map_upstream_error(_err(500, "banana"), "a")
+    assert short.message == "banana"
+
+
+async def test_client_redacts_whole_provider_pool(monkeypatch, failures):
+    monkeypatch.setattr(
+        client_module.config,
+        "providers",
+        [{"api_key": "fake-key-1234"}, {"api_key": "pool-key-0002"}, {"api_key": "tiny"}],
+    )
+    oc = _make_client(monkeypatch, _err(401, "saw pool-key-0002 and tiny", cls=AuthenticationError))
+    with pytest.raises(UpstreamHTTPError) as ei:
+        await oc.create_chat_completion(dict(REQUEST), None, "big")
+    assert ei.value.detail == "saw [redacted] and tiny"
+
+
+async def test_pool_read_is_defensive(monkeypatch, failures):
+    monkeypatch.setattr(client_module.config, "providers", [object()])  # no .get
+    oc = _make_client(monkeypatch, _err(401, "bad fake-key-1234", cls=AuthenticationError))
+    with pytest.raises(UpstreamHTTPError) as ei:
+        await oc.create_chat_completion(dict(REQUEST), None, "big")
+    assert ei.value.detail == "bad [redacted]"
+
+
+async def test_stream_cancel_reports_499_once_and_yields_nothing_more(monkeypatch, failures):
+    import asyncio
+
+    calls, _ = failures
+    oc = OpenAIClient("fake-key-1234", "https://upstream.invalid/v1")
+    reports = []
+    monkeypatch.setattr(oc, "_report_model_error", lambda s, d: reports.append((s, d)))
+
+    class Chunk:
+        def model_dump(self):
+            return {"choices": []}
+
+    async def upstream():
+        yield Chunk()
+        yield Chunk()
+        yield Chunk()
+
+    async def create(**kw):
+        return upstream()
+
+    monkeypatch.setattr(oc.client.chat.completions, "create", create)
+    gen = oc.create_chat_completion_stream(dict(REQUEST), "rid", "big")
+    first = await gen.__anext__()
+    assert first.startswith("data: ")
+    oc.cancel_request("rid")
+    rest = [x async for x in gen]
+    assert rest == []
+    assert reports == [(499, "Request cancelled")]
+    assert oc.active_requests == {}
+    assert calls == []
+
+
+async def test_non_stream_asyncio_cancellation_propagates_and_cleans_up(monkeypatch, failures):
+    import asyncio
+
+    calls, _ = failures
+    oc = OpenAIClient("fake-key-1234", "https://upstream.invalid/v1")
+    started = asyncio.Event()
+
+    async def hang(**kw):
+        started.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(oc.client.chat.completions, "create", hang)
+    task = asyncio.create_task(oc.create_chat_completion(dict(REQUEST), "rid2", "big"))
+    await started.wait()
+    assert "rid2" in oc.active_requests
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert oc.active_requests == {}
+    assert calls == []
+
+
+async def test_non_stream_cancel_request_gives_499(monkeypatch, failures):
+    import asyncio
+
+    oc = OpenAIClient("fake-key-1234", "https://upstream.invalid/v1")
+    started = asyncio.Event()
+
+    async def hang(**kw):
+        started.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(oc.client.chat.completions, "create", hang)
+    task = asyncio.create_task(oc.create_chat_completion(dict(REQUEST), "rid3", "big"))
+    await started.wait()
+    oc.cancel_request("rid3")
+    with pytest.raises(HTTPException) as ei:
+        await task
+    assert ei.value.status_code == 499
+    assert not isinstance(ei.value, UpstreamError)
+    assert oc.active_requests == {}
