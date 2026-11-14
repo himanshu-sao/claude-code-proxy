@@ -217,7 +217,7 @@ Context and output limits are resolved in this order: `MODEL_CONTEXT_LIMITS` env
 
 - **262,144 is NVIDIA's published hosted spec. It is NOT verified live**; the vendors claim about 1M, so the hosted limit may be lower than the model's native one.
 - **32,768 is this repo's own default output cap and has no source** (same precedent as commit `c5a0b70`).
-- The file is read from the **current directory** at startup only; restart after editing it. If none exists there, the proxy creates one in that directory at startup.
+- The file is read from the **current directory** at startup only; restart after editing it. If none exists there, the proxy creates one in that directory shortly after startup, once the background discovery task has run (unless `MODEL_CONTEXT_LIMITS` already covers every configured model).
 - When a configured `BIG_MODEL`/`MIDDLE_MODEL`/`SMALL_MODEL` is missing from it, the proxy runs upstream discovery and **rewrites this tracked file**; discovery output can overwrite curated entries, so review `git diff` after a first run with a new model.
 
 ### Provider Examples
@@ -307,7 +307,7 @@ NVIDIA NIM's deepseek-v4.1-flash changed its effort contract on 2026-10-11: it p
 Notes:
 
 - In-session `/effort` always wins over the proxy env vars.
-- A `max` level maps to the same canonical value as `xhigh`, so its upstream translation is identical to the `xhigh` row. A top-level `reasoning_effort: "max"` is accepted .
+- A `max` level maps to the same canonical value as `xhigh`, so its upstream translation is identical to the `xhigh` row. A top-level `reasoning_effort: "max"` is accepted.
 - The client level can arrive as top-level `reasoning_effort` or as `output_config.effort`. Precedence: top-level `reasoning_effort` > `output_config.effort` > per-tier `*_MODEL_EFFORT` > `REASONING_EFFORT` > built-in `high`.
 - The top-level field is an exact, case-sensitive set (`low|medium|high|xhigh|max`): `bogus` or `HIGH` returns 422. `output_config.effort` is stripped and lower-cased, and a malformed `output_config` (not an object, `effort` not a string, unknown level) is ignored, never rejected, so the env defaults apply.
 - Nemotron models get `chat_template_kwargs` thinking switches; `medium_effort` is only added when the model name contains `ultra`.
@@ -335,7 +335,7 @@ These settings come from Claude Code's documentation and have **not** been check
 
 ### Signal log (Phase 0 capture)
 
-**Open-proxy warning.** `HOST` defaults to `0.0.0.0`, and client key validation is off when `ANTHROPIC_API_KEY` is unset, so by default any peer that can reach the proxy can append records to this log. This capture is meant for a local, single-operator run. The strongest fix is to bind `HOST` to a loopback address (`HOST="127.0.0.1"`) **in `.env`**: `.env` is loaded with `override=True` and `.env.example` ships `HOST="0.0.0.0"`, so `HOST=127.0.0.1 ./start.sh` on the command line does not take effect while `.env` sets `HOST`. If you set `ANTHROPIC_API_KEY` instead, use a private random value: the `.env.example` value `your-expected-anthropic-api-key` is public, so copying it verbatim turns validation on but lets anyone who has read this repo in. A key only protects `POST /v1/messages` and `POST /v1/messages/count_tokens`; `/health`, `/test-connection`, `/v1/models` and `/` never check it.
+**Open-proxy warning.** `HOST` defaults to `0.0.0.0`, and client key validation is off when `ANTHROPIC_API_KEY` is unset, so by default any peer that can reach the proxy can append records to this log. This capture is meant for a local, single-operator run. The strongest fix is to bind `HOST` to a loopback address (`HOST="127.0.0.1"`) **in `.env`**: `.env` is loaded with `override=True` and `.env.example` ships `HOST="0.0.0.0"`, so `HOST=127.0.0.1 ./start.sh` on the command line does not take effect while `.env` sets `HOST`. If you set `ANTHROPIC_API_KEY` instead, use a private random value: the `.env.example` value `your-expected-anthropic-api-key` is public, so copying it verbatim turns validation on but lets anyone who has read this repo in. A configured key protects `POST /v1/messages`, `POST /v1/messages/count_tokens` and the desktop-compat routes (`/v1/me`, `/api/organizations`, `/v1/organizations`, `/v1/oauth/token`, `/v1/mcp_servers`, `/api/connectors`, `/api/plugins`); it does not protect `/health`, `/test-connection`, `/v1/models` or `/`.
 
 A temporary, opt-in capture to learn what real Claude Code requests look like before any routing is built. Off by default; set `AUTO_SIGNAL_LOG=1` and restart.
 
