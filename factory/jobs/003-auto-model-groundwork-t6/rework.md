@@ -84,3 +84,43 @@ QUICKSTART.md, .env.example, `src/conversion/effort_mapper.py` (docstrings) and 
 trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`), update `build.md` (first line `STATUS: GREEN`, `RED` or `BLOCKED`, plus
 a "Rework round 1" section mapping items 1-11 to what you changed and the file:line, and anything you decided NOT to do and why).
 Report the commit SHA and status.
+
+---
+
+# Rework round 2 (written by the orchestrator, authorised by the user: "One more rework round")
+
+Round 2 came back: security PASS, api (run the docs) PASS, code (accuracy) CHANGES with three one-line slips. I checked all three against
+the code and they are real. Docs only. Same rules as before: worktree only, shared venv python with `python -m pytest`, no source edits,
+no CLAUDE.md, no factory/project.md, no board.json. Read `round-2/review-code.md` first.
+
+1. **The key-protection sentence is false as written.** README.md "Signal log (Phase 0 capture)" open-proxy paragraph (about line 338)
+   says "A key only protects `POST /v1/messages` and `POST /v1/messages/count_tokens`; `/health`, `/test-connection`, `/v1/models` and
+   `/` never check it", and `.env.example` (about lines 62-63) says the same. VERIFIED in `src/api/compat.py` (line 95 `_compat_auth`
+   delegates to `validate_api_key`): the key is ALSO enforced on the desktop-compat routes `GET /api/organizations`, `GET /v1/organizations`,
+   `GET /api/organizations/{org_id}` (and `/v1/...`), `GET /api/organizations/{org_id}/{resource_path}`, `GET /v1/me`,
+   `POST /v1/oauth/token`, `GET /v1/mcp_servers`, `GET /api/connectors` and `GET /api/plugins`. VERIFIED: the compat catch-all
+   (`compat_catch_all`, line 179) has NO key dependency: it only returns a 404 error body for unknown paths and is not a data route.
+   Rewrite both places to say: a configured key protects `POST /v1/messages`, `POST /v1/messages/count_tokens` and the desktop-compat
+   routes (`/v1/me`, `/api/organizations`, `/v1/organizations`, `/v1/oauth/token`, `/v1/mcp_servers`, `/api/connectors`, `/api/plugins`);
+   it does NOT protect `/health`, `/test-connection`, `/v1/models` or `/`. Drop the word "only". Keep it short in `.env.example`
+   (name the two POST routes and say "and the desktop-compat routes"). Then grep README.md, QUICKSTART.md and `.env.example` for any
+   other sentence that says or implies which routes a key protects, and make every one consistent.
+2. **README.md line 310:** a stray space before the full stop (`is accepted .`). Fix it. grep the three files for other ` .` or ` ,`
+   typos you may have introduced.
+3. **README.md line 220 (Context windows):** "If none exists there, the proxy creates one in that directory at startup." is imprecise.
+   VERIFIED in `src/core/provider_discovery.py` (lines 135-237) and `src/main.py` (the discovery runs as a background `asyncio` task): the
+   file is written by the background discovery task shortly after startup, only when at least one configured model has no known limit
+   (if `MODEL_CONTEXT_LIMITS` or the cache already covers every configured model it is not written), so a missing file is created
+   "shortly after startup, once background discovery has run, unless `MODEL_CONTEXT_LIMITS` already covers every configured model".
+   Also re-read the same sentence's other claims ("read from the current directory at startup only") and keep them accurate.
+
+## Done means
+
+Re-run and report: `python -c "import src; print(src.__file__)"` (inside the worktree); the five-file suite prints `214 passed`;
+black and isort at line length 100; the AUTO_* parity loop; the AST-identical check of `src/conversion/effort_mapper.py` against
+`11b8f2a` with docstrings stripped; `git diff --stat 11b8f2a HEAD -- . ':!factory'` touches only README.md, QUICKSTART.md,
+.env.example and `src/conversion/effort_mapper.py`; and grep proof that the old "only protects" wording and the stray ` .` are gone.
+Commit on your branch (docs: ..., trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`) and add a "Rework round 2"
+section to `build.md` (first line stays `STATUS: GREEN`, `RED` or `BLOCKED`) mapping the three items to what you changed and where.
+Do NOT commit `round-1/review-security.md` (it quotes key-like example strings that the commit hook flags as a false positive).
+Report the commit SHA and status.
