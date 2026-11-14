@@ -332,7 +332,9 @@ async def health_check():
     # Get current RPM stats
     now = time.time()
     rpm_info = []
-    for api_key, usage in config._provider_usage.items():
+    # Keys are identified by their 1-based position in OPENAI_API_KEY, never by any part of the
+    # key itself: /health is unauthenticated, and even a prefix narrows a key.
+    for key_index, (api_key, usage) in enumerate(config._provider_usage.items(), start=1):
         # Reset expired windows
         if now - usage["window_start"] >= 60:
             current_count = 0
@@ -346,7 +348,7 @@ async def health_check():
 
         rpm_info.append(
             {
-                "key_prefix": api_key[:8] + "..." if len(api_key) > 8 else api_key,
+                "key_index": key_index,
                 "requests_this_minute": current_count,
                 "rpm_limit": config._rpm_limit,
                 "percentage_used": (

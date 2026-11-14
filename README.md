@@ -53,6 +53,8 @@ uv run claude-code-proxy
 docker compose up -d
 ```
 
+**Docker notes.** `docker compose up -d` builds the image from this directory and mounts your `.env` into the container at run time (`./.env:/app/.env`). The repository's `.dockerignore` keeps `.env`, `.git`, `logs/`, `.claude/` and `factory/` out of the build context, because the Dockerfile copies the whole directory into the image (`ADD . /app`). If you built an image from an older checkout that had no `.dockerignore`, that image contains your `.env`: rebuild it, and rotate the keys if the image was ever pushed or shared. `GET /health` is unauthenticated; it reports each upstream key only by its position in `OPENAI_API_KEY` (`key_index`), never by any part of the key.
+
 ### 4. Use with Claude Code
 
 ```bash
@@ -366,7 +368,7 @@ The shell expands the glob (the script does not), so run it after the log exists
 | `POST /v1/messages`                 | Main messages endpoint (Claude schema)   |
 | `POST /v1/messages/count_tokens`    | Token-count endpoint (Anthropic format)  |
 | `GET  /v1/models`                   | Models list (three tier aliases plus the optional auto alias) |
-| `GET  /health`                      | Health + per-key RPM usage/penalties     |
+| `GET  /health`                      | Health + per-key RPM usage/penalties (keys by index only) |
 | `GET  /test-connection`             | Liveness: probes upstream with a 5-token completion |
 | `GET/HEAD /api/hello` and `/hello`  | Tiny probe for Claude extensions         |
 | `GET  /`                            | Version + effective config summary       |

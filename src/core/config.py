@@ -204,8 +204,17 @@ class Config:
         penalty_duration = 60  # 60 seconds cooldown
         self._provider_penalties[api_key] = time.time() + penalty_duration
         _log.warning(
-            "Provider %s... reported rate limit. Penalizing for %ds.", api_key[:8], penalty_duration
+            "Provider key #%s reported rate limit. Penalizing for %ds.",
+            self._key_index(api_key),
+            penalty_duration,
         )
+
+    def _key_index(self, api_key: str) -> str:
+        """1-based position of api_key in the configured pool, for logs (never key material)."""
+        for index, provider in enumerate(self.providers, start=1):
+            if provider.get("api_key") == api_key:
+                return str(index)
+        return "?"
 
     def get_next_provider(self):
         """Return the next provider configuration respecting RPM limits.
