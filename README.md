@@ -17,8 +17,8 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 - **Image Support**: Base64 encoded image input
 - **Custom Headers**: Automatic injection of custom HTTP headers for API requests
 - **Desktop App Compatibility**: Minimal Anthropic control-plane endpoints (`/api/organizations`, `/v1/me`, a non-expiring `/v1/oauth/token` echo, empty connector/plugin listings) so the Claude Code desktop app's connectors/plugins browse UI opens instead of erroring; any other unknown `/v1` or `/api` path returns a well-formed Anthropic-style 404
-- **Error Handling**: Comprehensive error handling and logging
-- **Anthropic-shaped errors**: `/v1/messages` errors are returned with the real HTTP status in the Anthropic error shape (`{"type":"error","error":{...}}`); a stream that fails after it has begun (including one that ends without a `finish_reason`) ends with one `event: error` and no `message_stop`
+- **One error contract**: `/v1/messages` failures are returned with the real HTTP status and an Anthropic-shaped body, with the retry headers Claude Code reads; a stream that fails after it has begun ends with one `event: error` and no `message_stop` (details in "Errors and retries")
+- **Async and configurable**: async upstream calls, per-key rate limiting, configurable timeouts and retries
 
 ## Quick Start
 
@@ -114,6 +114,9 @@ Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow th
 - `RPM_LIMIT` - Max requests per minute per API key (default: `40`)
 - `MODEL_FAILURE_THRESHOLD` - Consecutive failures before switching to a fallback model (default: `3`)
 - `MODEL_HEALTH_CHECK_INTERVAL` - Seconds between background probes of the primary model (default: `60`)
+- `MODEL_PROBE_TIMEOUT` - Timeout in seconds for a health-check probe request (default: `10`)
+- `MODEL_PROBE_MAX_TOKENS` - `max_tokens` for a probe request; keep it tiny to avoid cost (default: `1`)
+- `MODEL_RESTORE_BACKOFF_MAX` - Cap, in probe intervals, on the exponential backoff between restore attempts (default: `8`)
 
 **API Configuration:**
 
@@ -130,6 +133,7 @@ Claude Code's `/effort` levels (`low`, `medium`, `high`, `xhigh`, `max`) flow th
 
 - `MAX_TOKENS_LIMIT` - Max response tokens (default: `4096`)
 - `MIN_TOKENS_LIMIT` - Min response tokens (default: `100`); raise this (e.g. `4096`) for reasoning models whose thinking consumes output budget
+- `CONTEXT_TRIM_RATIO` - Fraction of the model's context window reserved for input before old turns are trimmed (default: `0.85`); lower it to leave more room for output
 - `REQUEST_TIMEOUT` - Request timeout in seconds (default: `90`)
 - `MAX_RETRIES` - Extra upstream attempts after a failure (default: `2`, i.e. up to 3 calls). Applies to connection errors/timeouts, 408, 409, 429 and 5xx responses, via the OpenAI SDK; `0` disables retries; negative values are treated as `0`. Each attempt can take up to `REQUEST_TIMEOUT`
 - `STREAM_MAX_RETRIES` - Same as `MAX_RETRIES`, but only for streamed (`stream: true`) upstream calls (default: `0`). Keeping it at `0` lets Claude Code's own retry loop handle transient failures before the first byte. Non-integer or negative values fall back to `0` with a warning. `MAX_RETRIES` still applies to non-stream calls.
@@ -174,7 +178,9 @@ Environment variables with the `CUSTOM_HEADER_` prefix are automatically convert
 - Environment variable: `CUSTOM_HEADER_AUTHORIZATION`
 - HTTP Header: `AUTHORIZATION`
 
-### Supported Header Types
+### Common Header Names
+
+Any `CUSTOM_HEADER_*` variable is accepted; these are the names most providers use:
 
 - **Content Type**: `ACCEPT`, `CONTENT-TYPE`
 - **Authentication**: `AUTHORIZATION`, `X-API-KEY`
@@ -342,7 +348,7 @@ These settings come from Claude Code's documentation and have **not** been check
 A temporary, opt-in capture to learn what real Claude Code requests look like before any routing is built. Off by default; set `AUTO_SIGNAL_LOG=1` and restart.
 
 - **What is logged:** every request accepted by `POST /v1/messages`, for all models (not only the alias), streaming or not, appends one line to `logs/auto_signal.log`. It is written after authentication and validation, so a 401 or 422 is never logged; an accepted request is logged once even if the upstream later fails or the client disconnects. A failed write never changes the response (it is visible only at `DEBUG`).
-- **Files:** append-only, survives restarts, rotates at `AUTO_SIGNAL_LOG_MAX_BYTES` keeping `AUTO_SIGNAL_LOG_BACKUP_COUNT` files (`auto_signal.log.1` ... `.N`). It is separate from `logs/proxy.log` (truncated on each start), and `logs/` is gitignored. Rotation is safe for the default single uvicorn process only; multiple workers are unsupported.
+- **Files:** append-only, survives restarts, rotates at `AUTO_SIGNAL_LOG_MAX_BYTES` keeping `AUTO_SIGNAL_LOG_BACKUP_COUNT` files (`auto_signal.log.1` ... `.N`). It is separate from the proxy's own log (`start.sh` writes `logs/proxy_<timestamp>.log`; `logs/proxy.log` is opened in append mode), and `logs/` is gitignored. Rotation is safe for the default single uvicorn process only; multiple workers are unsupported.
 - **Configuration:** the on/off switch is read on every request, but `.env` is only loaded at startup (and overrides a shell export), so restart after changing it. `AUTO_SIGNAL_LOG_MAX_BYTES` and `AUTO_SIGNAL_LOG_BACKUP_COUNT` are read once, when the first record is written (the handler is created then).
 - **Privacy:** no message, system, tool or header **values**, and no base64. Each line holds identifier-shaped names (body fields, header names, `output_config` and `metadata` keys, the model name; anything not matching `[A-Za-z0-9_.:/-]{1,64}` is logged as `other`), counts, booleans, enum values, and two 8-hex **unsalted** hashes: `sid_hash` (the `x-claude-code-session-id` header) and `fm_hash` (the first user message: `<system-reminder>` blocks removed, then whitespace normalised, then cut to the first 512 characters; `fm_stripped` says whether any were removed). Names that match the pattern are logged verbatim, so a key-like string used as a model name, header name or key (for example one starting `sk-` or `ghp_`) would be kept. The hashes are only 32 bits and unsalted, so a short or templated prompt can be confirmed by someone who hashes a guess and can read the file. Keep the file local.
 - **Retention and disk use:** to finish a capture, set `AUTO_SIGNAL_LOG` off and restart the proxy **first** (the proxy keeps the file open, so deleting it while it runs leaves the proxy writing to an unlinked file), then delete `logs/auto_signal.log*`, rotated files included. Worst-case disk use is (`AUTO_SIGNAL_LOG_BACKUP_COUNT` + 1) x `AUTO_SIGNAL_LOG_MAX_BYTES`: up to 21 files x 1 GiB, about 21 GiB, at the maximum clamps, and a peer can drive it when the proxy is open. Keep the defaults (about 20 MB).
@@ -359,6 +365,27 @@ The shell expands the glob (the script does not), so run it after the log exists
 
 **What is NOT verified.** No live HTTP run of this feature has been done (local port binding was declined; checks were in-process only). Also unverified: the real Claude Code request shape (`output_config.effort`, the headers, adaptive thinking) and `_SUPPORTED_CAPABILITIES` behaviour; the 262,144 and 32,768 context figures; latency under load, shutdown and real client disconnects; the default log-path modes in a running proxy; Windows or platforms without `O_NOFOLLOW`; multi-worker use; the 95%/5% thresholds; and the full live `pytest tests/` suite.
 
+### Errors and retries
+
+**Before the reply starts** (an upstream error, or all local keys exhausted), `/v1/messages` returns the upstream's real HTTP status with an Anthropic-shaped body, for streaming and non-streaming requests alike:
+
+```json
+{"type": "error", "error": {"type": "rate_limit_error", "message": "..."}}
+```
+
+- **Type by status:** 400 `invalid_request_error`, 401 `authentication_error`, 403 `permission_error`, 404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`, 500 `api_error`, 529 `overloaded_error`. Any other 4xx is `invalid_request_error` and any other 5xx is `api_error`; the status is always kept.
+- **Message:** the upstream's text, with your configured API keys redacted. A context-length rejection (a 400 or 413 whose text contains `context_length_exceeded`, `maximum context length`, `string too long`, `context window` or `too many tokens`) gets the prefix `capability_rejected: prompt_too_long ` in front of the upstream text. Claude Code's documentation says it treats that token like "Prompt is too long"; this has not been checked against a real Claude Code run.
+- **Headers forwarded from the upstream:** `retry-after` (digits only, passed through uncapped), `x-should-retry`, `request-id`, `x-request-id` and `anthropic-ratelimit-unified-*` (printable ASCII, at most 256 characters). The proxy's own 429 (`All API keys exhausted...`) carries a `Retry-After` of 1 to 60 seconds.
+- **Streams wait for the first upstream chunk** before sending response headers, so a failure before it becomes a real HTTP status. A stream that closes with no chunks at all is a 502.
+
+**After a stream has begun** the HTTP status is already 200. The stream ends with one `event: error` block and **no** `message_stop`. A stream that ends without any chunk carrying a `finish_reason` is treated as cut off: a 502 if nothing was sent yet, otherwise that `event: error`. The OpenAI SDK strips `data: [DONE]`, so a provider that never sends a `finish_reason` will show errors on complete replies; check your models before relying on this.
+
+**Not wrapped:** the proxy's own key check (401), FastAPI's request validation (422) and `/v1/messages/count_tokens` errors keep `{"detail": ...}`. `/test-connection` returns its own JSON (HTTP 503 with `status`, `error_type`, `message` and `suggestions`) when the probe fails.
+
+**Retries and fallback.** `MAX_RETRIES` applies to non-streaming upstream calls and `STREAM_MAX_RETRIES` (default `0`) to streaming ones. Claude Code has its own retry loop on top, so a retry inside the proxy multiplies with it; keep the streaming value at `0` so Claude Code retries before the first byte. A failure counts toward model fallback only when it is a 429, a 503, a rate-limit message, a model not found or unavailable, "overloaded" or "capacity"; a 400 never does.
+
+**Not verified:** how Claude Code displays the mid-stream `event: error` and the 502, and real-provider behaviour for streams without a `finish_reason`.
+
 ### Endpoints reference
 
 | Path                                | Purpose                                  |
@@ -370,6 +397,8 @@ The shell expands the glob (the script does not), so run it after the log exists
 | `GET  /test-connection`             | Liveness: probes upstream with a 5-token completion |
 | `GET/HEAD /api/hello` and `/hello`  | Tiny probe for Claude extensions         |
 | `GET  /`                            | Version + effective config summary       |
+| `/api/organizations`, `/v1/organizations`, `/v1/me`, `/v1/oauth/token`, `/v1/mcp_servers`, `/api/connectors`, `/api/plugins` | Desktop-app compatibility stubs (see `PROXY_ORG_ID`) |
+| any other `/v1/*` or `/api/*`       | Anthropic-shaped 404                     |
 
 ## Testing
 
@@ -377,7 +406,7 @@ The shell expands the glob (the script does not), so run it after the log exists
 # Offline unit subset, no server needed (214 tests)
 uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py tests/test_signal_log.py
 
-# Broader offline run (239 tests; also covers tests/test_compat_endpoints.py)
+# Full offline run (592 tests; also covers the error-contract, retry, config and desktop-compat tests)
 uv run pytest tests/ --ignore=tests/test_main.py
 
 # Full suite: additionally needs a live proxy on :8082, because tests/test_main.py posts to it
@@ -387,7 +416,7 @@ uv run pytest tests/
 NVIDIA_API_KEY=nvapi-... uv run scripts/test_nim_effort.py [model]
 ```
 
-Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. The test counts above (214 / 239) are the current numbers and will change as tests are added.
+Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. The test counts above (214 / 592) are the current numbers and will change as tests are added. The offline suite passes on Python 3.9 and 3.14.
 
 ## Development
 
@@ -414,34 +443,38 @@ uv run mypy src/
 claude-code-proxy/
 ├── src/
 │   ├── main.py                  # Server entrypoint
-│   ├── api/endpoints.py         # FastAPI routes (/v1/messages, /v1/models, /health, ...)
+│   ├── api/
+│   │   ├── endpoints.py         # FastAPI routes (/v1/messages, /v1/models, /health, ...)
+│   │   └── compat.py            # Desktop-app compatibility stubs and the Anthropic-shaped 404
 │   ├── conversion/
 │   │   ├── request_converter.py   # Claude request -> OpenAI request
-│   │   ├── response_converter.py  # OpenAI response -> Claude response
+│   │   ├── response_converter.py  # OpenAI response -> Claude response (incl. SSE streaming)
 │   │   └── effort_mapper.py       # Reasoning-effort translation per model family
 │   ├── core/
-│   │   ├── client.py              # Async upstream client with multi-key RPM + retries
+│   │   ├── client.py              # Async upstream client: multi-key RPM, retries, error accounting
+│   │   ├── errors.py              # One upstream-error mapping: status, type, headers, redaction
 │   │   ├── config.py              # Env-var configuration
 │   │   ├── model_manager.py       # Tier mapping + fallback/health failover
 │   │   ├── context_manager.py     # Context-window truncation
 │   │   ├── signal_log.py          # Opt-in request signal log (no raw message text; AUTO_SIGNAL_LOG)
-│   │   └── provider_discovery.py  # Upstream provider detection
+│   │   ├── provider_discovery.py  # Upstream provider detection
+│   │   ├── constants.py           # Shared constants
+│   │   └── logging.py             # Logging setup
 │   └── models/                    # Pydantic schemas (Claude + OpenAI)
-├── tests/                       # Unit tests (pytest)
-├── scripts/                     # Live/verification scripts (need running proxy or real keys)
-│   └── analyze_signal_log.py    #   offline analyzer for logs/auto_signal.log (no proxy needed)
+├── tests/                       # Unit tests (pytest); test_main.py needs a live proxy
+├── scripts/                     # Live/verification scripts (need a running proxy or real keys)
+│   ├── analyze_signal_log.py    #   offline analyzer for logs/auto_signal.log (no proxy needed)
+│   ├── test_cancellation.py     #   client-disconnect cancellation
+│   ├── test_desktop_compat.py   #   desktop-app compatibility routes
+│   └── test_nim_effort.py       #   reasoning-effort envelope against NVIDIA NIM
 ├── start_proxy.py               # Startup script
+├── start.sh / stop.sh / restart.sh   # Background run helpers (logs to logs/proxy_<timestamp>.log)
+├── Dockerfile, docker-compose.yml    # Container run (port 8082)
 ├── .env.example                 # Config template
+├── QUICKSTART.md                # Two-minute setup
+├── CLAUDE.md                    # Project instructions for contributors and agents
 └── README.md                    # This file
 ```
-
-## Performance
-
-- **Async/await** for high concurrency
-- **Connection pooling** for efficiency
-- **Streaming support** for real-time responses
-- **Configurable timeouts** and retries
-- **Smart error handling** with detailed logging
 
 ## License
 

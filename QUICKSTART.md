@@ -35,8 +35,8 @@ The Claude Code desktop app also works against the proxy: its connectors/plugins
 browse UI probes a small set of Anthropic control-plane endpoints, which the
 proxy answers with minimal payloads (a fake org from `PROXY_ORG_ID`, a
 non-expiring token echo, and empty connector/plugin listings), so the panels
-open showing empty lists instead of erroring. See README's "Desktop App
-Compatibility" section for details.
+open showing empty lists instead of erroring. See the README's Features list and
+the `PROXY_ORG_ID` entry for details.
 
 ## How model mapping works
 
@@ -55,8 +55,9 @@ The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/mode
 
 ## Errors
 
-- An error from the upstream, or the proxy's own 429 when all keys are exhausted, that happens before the first byte of the reply returns a real HTTP status with an Anthropic-style body: `{"type":"error","error":{"type":"...","message":"..."}}`. Two errors keep the `{"detail": ...}` shape: an invalid proxy API key (401) and an invalid request body (422).
+- An error from the upstream, or the proxy's own 429 when all keys are exhausted, that happens before the first byte of the reply returns a real HTTP status with an Anthropic-style body: `{"type":"error","error":{"type":"...","message":"..."}}`. An invalid proxy API key (401) and an invalid request body (422) keep the `{"detail": ...}` shape.
 - If the upstream fails after streaming has begun, the HTTP status is already 200 because the headers were sent, and the stream ends with one `event: error` block and no `message_stop`. How Claude Code displays this has not been checked in a live session.
+- Streaming requests are not retried inside the proxy by default (`STREAM_MAX_RETRIES=0`), so Claude Code's own retry applies. See the README's "Errors and retries" for the status table, forwarded headers and caveats.
 
 ## Verify your setup
 
