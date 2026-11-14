@@ -16,6 +16,7 @@ from src.core.errors import (
     counts_as_model_failure,
     map_upstream_error,
     redact_keys,
+    truncated_stream_error,
 )
 
 _log = logging.getLogger("client")
@@ -165,6 +166,7 @@ class OpenAIClient:
             # Create the streaming completion
             streaming_completion = await self.client.chat.completions.create(**request)
 
+            finished = False
             async for chunk in streaming_completion:
                 # Check for cancellation before yielding each chunk
                 if request_id and request_id in self.active_requests:
@@ -175,8 +177,16 @@ class OpenAIClient:
 
                 # Convert chunk to SSE format matching original HTTP client format
                 chunk_dict = chunk.model_dump()
+                # A usage-only final chunk has empty choices and never counts as a finish
+                if any(c.get("finish_reason") for c in chunk_dict.get("choices") or []):
+                    finished = True
                 chunk_json = json.dumps(chunk_dict, ensure_ascii=False)
                 yield f"data: {chunk_json}"
+
+            if not finished:
+                # The SDK strips a real "[DONE]" line, so a cut-off stream and an upstream that
+                # never sends a finish_reason look the same here: both are an error.
+                raise UpstreamError(self._handle_truncated_stream())
 
             # Signal end of stream
             yield "data: [DONE]"
@@ -200,6 +210,12 @@ class OpenAIClient:
         self._report_model_error(mapped.status, str(exc))
         if isinstance(exc, RateLimitError):
             config.report_rate_limit(self.api_key)
+        return mapped
+
+    def _handle_truncated_stream(self) -> MappedError:
+        """Account (log once) for a stream that ended without a finish_reason."""
+        mapped = truncated_stream_error()
+        self._report_model_error(mapped.status, mapped.message)
         return mapped
 
     def _pool_keys(self) -> list:

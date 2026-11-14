@@ -564,3 +564,24 @@ async def test_non_stream_cancel_request_gives_499(monkeypatch, failures):
     assert ei.value.status_code == 499
     assert not isinstance(ei.value, UpstreamError)
     assert oc.active_requests == {}
+
+
+def test_mapper_message_is_always_utf8_encodable():
+    exc = _err(400, body={"error": {"message": "bad \ud800 and \udfff text"}})
+    mapped = map_upstream_error(exc)
+    assert mapped.message == "bad \ufffd and \ufffd text"
+    error_json(mapped.error_type, mapped.message).encode("utf-8")
+    non_api = map_upstream_error(RuntimeError("x \ud800 y"))
+    assert non_api.message == "Unexpected error: x \ufffd y"
+
+
+@pytest.mark.parametrize(
+    "exc,expected",
+    [
+        (ConnectionResetError(), "Unexpected error: ConnectionResetError"),
+        (RuntimeError("   "), "Unexpected error: RuntimeError"),
+        (RuntimeError("boom"), "Unexpected error: boom"),
+    ],
+)
+def test_empty_text_for_non_http_errors_uses_the_type_name(exc, expected):
+    assert map_upstream_error(exc).message == expected
