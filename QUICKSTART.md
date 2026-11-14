@@ -53,6 +53,11 @@ Each tier accepts a comma-separated fallback list, and `/effort` levels (`low|me
 
 The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/models`, present only when `AUTO_MODEL_ENABLED` is on). It is a placeholder that always resolves to the BIG tier; it does no routing yet (a planned follow-up). Related variables, all optional and all needing a restart: `AUTO_MODEL_ALIAS`, `AUTO_MODEL_ENABLED` and the opt-in request capture `AUTO_SIGNAL_LOG` (plus `AUTO_SIGNAL_LOG_MAX_BYTES` / `AUTO_SIGNAL_LOG_BACKUP_COUNT`). See the README sections "Selecting the auto model in Claude Code" and "Signal log (Phase 0 capture)". Before turning `AUTO_SIGNAL_LOG` on, read its open-proxy warning: with the default `HOST="0.0.0.0"` and no `ANTHROPIC_API_KEY`, any peer that can reach the proxy can append to the log, so bind `HOST` to `127.0.0.1` in `.env`.
 
+## Errors
+
+- An error from the upstream, or the proxy's own 429 when all keys are exhausted, that happens before the first byte of the reply returns a real HTTP status with an Anthropic-style body: `{"type":"error","error":{"type":"...","message":"..."}}`. Two errors keep the `{"detail": ...}` shape: an invalid proxy API key (401) and an invalid request body (422).
+- If the upstream fails after streaming has begun, the HTTP status is already 200 because the headers were sent, and the stream ends with one `event: error` block and no `message_stop`. How Claude Code displays this has not been checked in a live session.
+
 ## Verify your setup
 
 ```bash
