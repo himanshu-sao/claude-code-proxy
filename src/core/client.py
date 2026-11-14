@@ -5,10 +5,17 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from fastapi import HTTPException
 from openai import AsyncAzureOpenAI, AsyncOpenAI
-from openai._exceptions import APIError, AuthenticationError, BadRequestError, RateLimitError
+from openai._exceptions import RateLimitError
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from src.core.config import config
+from src.core.errors import (
+    MappedError,
+    UpstreamError,
+    UpstreamHTTPError,
+    counts_as_model_failure,
+    map_upstream_error,
+)
 
 _log = logging.getLogger("client")
 
@@ -115,24 +122,10 @@ class OpenAIClient:
 
             return result
 
-        except AuthenticationError as e:
-            self._report_model_error(401, str(e))
-            raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
-        except RateLimitError as e:
-            self._report_model_error(429, str(e))
-            config.report_rate_limit(self.api_key)
-            raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
-
-        except BadRequestError as e:
-            self._report_model_error(400, str(e))
-            raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
-        except APIError as e:
-            status_code = getattr(e, "status_code", 500)
-            self._report_model_error(status_code, str(e))
-            raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
+        except HTTPException:
+            raise
         except Exception as e:
-            self._report_model_error(500, str(e))
-            raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+            raise UpstreamHTTPError(self._handle_upstream_exception(e)) from e
 
         finally:
             # Clean up active request tracking
@@ -167,8 +160,7 @@ class OpenAIClient:
                 # Check for cancellation before yielding each chunk
                 if request_id and request_id in self.active_requests:
                     if self.active_requests[request_id].is_set():
-                        # Send cancellation event instead of raising exception
-                        yield f'data: {{"error": {{"message": "Request cancelled by client", "type": "cancelled"}}}}'
+                        # Cancelled by the client: nothing to send to a closed connection
                         self._report_model_error(499, "Request cancelled")
                         return
 
@@ -183,78 +175,26 @@ class OpenAIClient:
             # Report successful model usage (only if we got here without errors)
             self.report_model_success()
 
-        except AuthenticationError as e:
-            self._report_model_error(401, str(e))
-            error_msg = self.classify_openai_error(str(e))
-            yield f'data: {{"error": {{"message": "{error_msg}", "type": "authentication_error"}}}}'
-        except RateLimitError as e:
-            self._report_model_error(429, str(e))
-            config.report_rate_limit(self.api_key)
-            error_msg = self.classify_openai_error(str(e))
-            yield f'data: {{"error": {{"message": "{error_msg}", "type": "rate_limit_error"}}}}'
-
-        except BadRequestError as e:
-            self._report_model_error(400, str(e))
-            error_msg = self.classify_openai_error(str(e))
-            yield f'data: {{"error": {{"message": "{error_msg}", "type": "bad_request_error"}}}}'
-        except APIError as e:
-            status_code = getattr(e, "status_code", 500)
-            self._report_model_error(status_code, str(e))
-            error_msg = self.classify_openai_error(str(e))
-            yield f'data: {{"error": {{"message": "{error_msg}", "type": "api_error"}}}}'
+        except UpstreamError:
+            raise
         except Exception as e:
-            self._report_model_error(500, str(e))
-            yield f'data: {{"error": {{"message": "Unexpected error: {str(e)}", "type": "internal_error"}}}}'
+            raise UpstreamError(self._handle_upstream_exception(e)) from e
 
         finally:
             # Clean up active request tracking
             if request_id and request_id in self.active_requests:
                 del self.active_requests[request_id]
 
-    def classify_openai_error(self, error_detail: Any) -> str:
-        """Provide specific error guidance for common OpenAI API issues."""
-        error_str = str(error_detail).lower()
+    def _handle_upstream_exception(self, exc: BaseException) -> MappedError:
+        """Map an upstream failure and do the accounting (once per client call)."""
+        mapped = map_upstream_error(exc, self.api_key)
+        self._report_model_error(mapped.status, str(exc))
+        if isinstance(exc, RateLimitError):
+            config.report_rate_limit(self.api_key)
+        return mapped
 
-        # Context length / token limit exceeded
-        if (
-            "context_length_exceeded" in error_str
-            or "maximum context length" in error_str
-            or "string too long" in error_str
-            or "context window" in error_str
-            or "too many tokens" in error_str
-        ):
-            return (
-                "Context window exceeded: the conversation is too long for this model. "
-                "The proxy attempted to trim the history automatically. "
-                "If this persists, consider increasing CONTEXT_TRIM_RATIO or using a model "
-                "with a larger context window."
-            )
-
-        # Region/country restrictions
-        if (
-            "unsupported_country_region_territory" in error_str
-            or "country, region, or territory not supported" in error_str
-        ):
-            return "OpenAI API is not available in your region. Consider using a VPN or Azure OpenAI service."
-
-        # API key issues
-        if "invalid_api_key" in error_str or "unauthorized" in error_str:
-            return "Invalid API key. Please check your OPENAI_API_KEY configuration."
-
-        # Rate limiting
-        if "rate_limit" in error_str or "quota" in error_str:
-            return "Rate limit exceeded. Please wait and try again, or upgrade your API plan."
-
-        # Model not found
-        if "model" in error_str and ("not found" in error_str or "does not exist" in error_str):
-            return "Model not found. Please check your BIG_MODEL and SMALL_MODEL configuration."
-
-        # Billing issues
-        if "billing" in error_str or "payment" in error_str:
-            return "Billing issue. Please check your OpenAI account billing status."
-
-        # Default: return original message
-        return str(error_detail)
+    def _redact(self, text: str) -> str:
+        return text.replace(self.api_key, "[redacted]") if self.api_key else text
 
     def _report_model_error(self, status_code: int, error_detail: str):
         """Report model errors to config for fallback tracking."""
@@ -263,27 +203,14 @@ class OpenAIClient:
         if self._last_model_tier == "unknown":
             return
 
-        error_str = str(error_detail).lower()
-        is_model_error = (
-            status_code == 429
-            or status_code == 503
-            or "rate_limit" in error_str
-            or "model" in error_str
-            and (
-                "not found" in error_str
-                or "does not exist" in error_str
-                or "unavailable" in error_str
-            )
-            or "overloaded" in error_str
-            or "capacity" in error_str
-        )
+        is_model_error = counts_as_model_failure(status_code, str(error_detail))
 
         # Log the error
         _log.warning(
             "Model error [%s] %s: %s (status=%d, model_error=%s)",
             self._last_model_tier.upper(),
             self._last_model,
-            str(error_detail)[:100],
+            self._redact(str(error_detail))[:100],
             status_code,
             is_model_error,
         )
