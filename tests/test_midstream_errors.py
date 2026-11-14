@@ -13,7 +13,7 @@ from openai import APIStatusError
 from src.conversion.response_converter import (
     convert_openai_streaming_to_claude_with_cancellation as convert,
 )
-from src.core.errors import UpstreamError, map_upstream_error
+from src.core.errors import UpstreamError, UpstreamHTTPError, map_upstream_error
 from src.models.claude import ClaudeMessagesRequest
 
 REQ = httpx.Request("POST", "https://upstream.invalid/v1/chat/completions")
@@ -113,6 +113,25 @@ def test_midstream_499_still_cancelled_event():
     assert _error_data(out)["error"] == {
         "type": "cancelled",
         "message": "Request was cancelled by client",
+    }
+    assert _events(out)[-1] == "error"
+    assert _events(out).count("error") == 1
+    assert "message_stop" not in out
+
+
+def test_midstream_upstream_http_error_uses_upstream_handler():
+    """UpstreamHTTPError is both an UpstreamError and an HTTPException; the UpstreamError
+    handler must win, so the mapped type is emitted instead of re-raising."""
+    resp = httpx.Response(503, request=REQ)
+    exc = APIStatusError("down", response=resp, body={"error": {"message": "down"}})
+    err = UpstreamHTTPError(map_upstream_error(exc))
+    out = _run([_text("hi")], raises=err)
+    assert _events(out)[-1] == "error"
+    assert _events(out).count("error") == 1
+    assert "message_stop" not in out
+    assert _error_data(out) == {
+        "type": "error",
+        "error": {"type": err.mapped.error_type, "message": err.mapped.message},
     }
 
 

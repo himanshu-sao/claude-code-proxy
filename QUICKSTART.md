@@ -55,8 +55,8 @@ The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/mode
 
 ## Errors
 
-- An error before the first byte of the reply (bad request, auth, rate limit, upstream down) returns a real HTTP status with an Anthropic-style body: `{"type":"error","error":{"type":"...","message":"..."}}`. There is no `{"detail": ...}` wrapper.
-- If the upstream fails after streaming has begun, the stream ends with one `event: error` block and no `message_stop`. Claude Code treats that as a failed request and retries on its own.
+- An error from the upstream, or the proxy's own 429 when all keys are exhausted, that happens before the first byte of the reply returns a real HTTP status with an Anthropic-style body: `{"type":"error","error":{"type":"...","message":"..."}}`. Two errors keep the `{"detail": ...}` shape: an invalid proxy API key (401) and an invalid request body (422).
+- If the upstream fails after streaming has begun, the HTTP status is already 200 because the headers were sent, and the stream ends with one `event: error` block and no `message_stop`. How Claude Code displays this has not been checked in a live session.
 
 ## Verify your setup
 
