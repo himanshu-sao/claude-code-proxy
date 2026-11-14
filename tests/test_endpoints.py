@@ -105,7 +105,7 @@ class _StubClient:
 
 @pytest.fixture
 def stub_upstream(monkeypatch):
-    async def _next_async():
+    async def _next_async(*, stream=False):
         return _StubClient()
 
     monkeypatch.setattr(_config, "get_next_client", lambda: _StubClient())
@@ -273,6 +273,10 @@ def test_signal_log_failed_upstream_is_still_logged_once(stub_upstream, signal_p
     monkeypatch.setenv("AUTO_SIGNAL_LOG", "1")
     res = _post(ALIAS)
     assert res.status_code == 500
+    assert res.json() == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "Internal server error"},
+    }
     assert len(_signal_records(signal_path)) == 1
 
 

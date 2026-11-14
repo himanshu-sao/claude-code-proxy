@@ -1,5 +1,7 @@
+import asyncio
 import os
 import time
+import traceback
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -15,6 +17,7 @@ from src.conversion.response_converter import (
 from src.core import signal_log
 from src.core.client import OpenAIClient
 from src.core.config import config
+from src.core.errors import UpstreamError, error_envelope, error_type_for_status
 from src.core.logging import logger
 from src.core.model_manager import model_manager
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
@@ -93,14 +96,100 @@ async def validate_api_key(
         )
 
 
+FIRST_CHUNK_POLL_SECONDS = 0.25
+
+
+class _ClientGone(Exception):
+    """The client disconnected while we waited for the first upstream chunk."""
+
+
+def _error_response(
+    status: int, error_type: str, message: str, headers: Optional[dict] = None
+) -> JSONResponse:
+    """Anthropic-envelope error with a real HTTP status."""
+    return JSONResponse(
+        status_code=status,
+        content=error_envelope(error_type, message),
+        headers=headers or None,
+    )
+
+
+def _mapped_response(mapped) -> JSONResponse:
+    """Render a MappedError; its headers were already filtered and sanitised by the mapper."""
+    return _error_response(mapped.status, mapped.error_type, mapped.message, mapped.headers)
+
+
+def _exhausted_response() -> JSONResponse:
+    """Our own 429 when every local key is over its RPM limit or cooling down."""
+    retry_after = max(1, min(60, int(config.seconds_until_key_available())))
+    return _error_response(
+        429,
+        "rate_limit_error",
+        "All API keys exhausted. Please wait before trying again.",
+        {"Retry-After": str(retry_after)},
+    )
+
+
+async def _prepend(first, gen):
+    """Yield the already-read first chunk, then the rest of ``gen``; always close ``gen``."""
+    try:
+        yield first
+        async for item in gen:
+            yield item
+    finally:
+        await gen.aclose()
+
+
+async def _empty():
+    return
+    yield  # pragma: no cover - makes this an async generator
+
+
+async def _await_first_chunk(gen, http_request, client, request_id):
+    """Read the first chunk of ``gen`` before any response byte is sent.
+
+    The upstream call happens on the first ``__anext__``. Upstream failures re-raise unchanged
+    (UpstreamError) and an empty stream raises StopAsyncIteration. There is no extra timer: a
+    hang is bounded by the SDK's REQUEST_TIMEOUT, which surfaces as a mapped 500. While waiting,
+    a client disconnect cancels the upstream call and raises _ClientGone.
+    """
+    task = asyncio.ensure_future(gen.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=FIRST_CHUNK_POLL_SECONDS)
+            if done:
+                return task.result()
+            if await http_request.is_disconnected():
+                client.cancel_request(request_id)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                await gen.aclose()
+                client.active_requests.pop(request_id, None)
+                raise _ClientGone()
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 - already unwinding; drop the task's outcome
+                pass
+        try:
+            await gen.aclose()
+        except BaseException:  # noqa: BLE001
+            pass
+        client.active_requests.pop(request_id, None)
+        raise
+
+
 @router.post("/v1/messages")
 async def create_message(
     request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)
 ):
+    request_id = str(uuid.uuid4())
     try:
-        # Generate unique request ID for cancellation tracking
-        request_id = str(uuid.uuid4())
-
         # Map Claude model to OpenAI model and tier
         openai_model, model_tier = model_manager.map_claude_model_to_openai(request.model)
 
@@ -138,80 +227,64 @@ async def create_message(
             _write_last_model(model_tier or "unknown", openai_model)
 
         if request.stream:
-            # Streaming response - wrap in error handling
-            try:
-                client = await config.get_next_client_async()
-                if client is None:
-                    # All API keys exhausted - return 429 with a retry hint
-                    raise HTTPException(
-                        status_code=429,
-                        detail="All API keys exhausted. Please wait before trying again.",
-                        headers={"Retry-After": str(config.seconds_until_key_available())},
-                    )
-                openai_stream = client.create_chat_completion_stream(
-                    openai_request, request_id, model_tier
-                )
-                return StreamingResponse(
-                    convert_openai_streaming_to_claude_with_cancellation(
-                        openai_stream,
-                        request,
-                        logger,
-                        http_request,
-                        client,
-                        request_id,
-                    ),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Headers": "*",
-                    },
-                )
-            except HTTPException:
-                # Our own deliberate HTTP errors (e.g. 429 for exhausted keys) must reach the client
-                raise
-            except Exception as e:
-                # Log unexpected errors (API errors are now yielded as events in the stream)
-                logger.error(f"Unexpected streaming error: {e}")
-                import traceback
-
-                logger.error(traceback.format_exc())
-        else:
-            # Non-streaming response
-            client = await config.get_next_client_async()
+            client = await config.get_next_client_async(stream=True)
             if client is None:
-                # All API keys exhausted - return 429 with a retry hint
-                raise HTTPException(
-                    status_code=429,
-                    detail="All API keys exhausted. Please wait before trying again.",
-                    headers={"Retry-After": str(config.seconds_until_key_available())},
-                )
+                return _exhausted_response()
+            gen = client.create_chat_completion_stream(openai_request, request_id, model_tier)
             try:
-                openai_response = await client.create_chat_completion(
-                    openai_request, request_id, model_tier
-                )
-                claude_response = convert_openai_to_claude_response(openai_response, request)
-                return claude_response
-            except HTTPException as e:
-                # Re-raise HTTP exceptions as-is (client already reported the error)
-                raise
-            except Exception as e:
-                # Log the error and re-raise (client already reported the error)
-                logger.error(f"Non-streaming request failed: {e}")
-                raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
+                first = await _await_first_chunk(gen, http_request, client, request_id)
+                stream_source = _prepend(first, gen)
+            except StopAsyncIteration:
+                stream_source = _empty()
+            return StreamingResponse(
+                convert_openai_streaming_to_claude_with_cancellation(
+                    stream_source,
+                    request,
+                    logger,
+                    http_request,
+                    client,
+                    request_id,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
 
-        logger.error(f"Unexpected error processing request: {e}")
+        # Non-streaming response
+        client = await config.get_next_client_async()
+        if client is None:
+            return _exhausted_response()
+        openai_response = await client.create_chat_completion(
+            openai_request, request_id, model_tier
+        )
+        return convert_openai_to_claude_response(openai_response, request)
+    except UpstreamError as e:
+        # UpstreamHTTPError is also an HTTPException, so this must stay first. The client
+        # already reported the failure to config, exactly once.
+        logger.info(
+            "Request [%s] failed: status=%s type=%s",
+            request_id[:8],
+            e.mapped.status,
+            e.mapped.error_type,
+        )
+        return _mapped_response(e.mapped)
+    except _ClientGone:
+        logger.info("Request [%s] client disconnected before first chunk", request_id[:8])
+        return _error_response(499, "api_error", "Client disconnected")
+    except HTTPException as e:
+        error_type = error_type_for_status(e.status_code)
+        logger.info(
+            "Request [%s] failed: status=%s type=%s", request_id[:8], e.status_code, error_type
+        )
+        return _error_response(e.status_code, error_type, str(e.detail), e.headers)
+    except Exception:
+        logger.error("Unexpected error processing request [%s]", request_id[:8])
         logger.error(traceback.format_exc())
-        # Reuse the same client if available, otherwise get a new one
-        # (In practice, 'client' should be available from the try block above)
-        # But to be safe, we'll try to get it from the failed request context
-        error_message = "Internal server error"
-        raise HTTPException(status_code=500, detail=error_message)
+        return _error_response(500, "api_error", "Internal server error")
 
 
 @router.post("/v1/messages/count_tokens")
