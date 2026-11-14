@@ -5,7 +5,7 @@ This module must stay free of ``src.core.config`` / ``src.core.client`` imports 
 
 import json
 import re
-from typing import Any, Dict, Iterable, NamedTuple, Optional
+from typing import Dict, Iterable, NamedTuple, Optional
 
 from fastapi import HTTPException
 from openai._exceptions import APIError, AuthenticationError, RateLimitError
@@ -37,6 +37,8 @@ _RETRY_AFTER_RE = re.compile(r"[0-9]{1,10}", re.ASCII)
 _SAFE_HEADER_RE = re.compile(r"[\x20-\x7e]*", re.ASCII)
 _MAX_HEADER_VALUE_LEN = 256
 MIN_REDACT_KEY_LEN = 8
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+TRUNCATED_STREAM_MESSAGE = "Upstream stream ended before a finish_reason was received"
 
 
 class MappedError(NamedTuple):
@@ -61,6 +63,18 @@ def counts_as_model_failure(status: int, text: str) -> bool:
         )
         or "overloaded" in error_str
         or "capacity" in error_str
+    )
+
+
+def truncated_stream_error() -> MappedError:
+    """The upstream stream closed without any choice carrying a finish_reason (cut off)."""
+    return MappedError(
+        status=502,
+        error_type=error_type_for_status(502),
+        message=TRUNCATED_STREAM_MESSAGE,
+        headers={},
+        retryable=True,
+        counts_as_model_failure=False,
     )
 
 
@@ -150,7 +164,7 @@ def map_upstream_error(
     """
     if not isinstance(exc, APIError):
         status = 500
-        message = "Unexpected error: " + str(exc)
+        message = "Unexpected error: " + (str(exc) if str(exc).strip() else type(exc).__name__)
         headers: Dict[str, str] = {}
         text_for_rule = str(exc)
     else:
@@ -162,6 +176,8 @@ def map_upstream_error(
         text_for_rule = str(exc)
 
     message = redact_keys(message, [api_key, *extra_keys])
+    # Upstream text may hold lone surrogates; they would make the JSON body unencodable as UTF-8.
+    message = _LONE_SURROGATE_RE.sub("\ufffd", message)
 
     if status in (400, 413) and isinstance(exc, APIError):
         haystack = (message + str(exc)).lower()
