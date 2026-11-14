@@ -1,7 +1,9 @@
 """Reasoning-effort routing layer.
 
-Claude Code 2.1.x sends effort as one of ``low | medium | high | xhigh``, but
-each OpenAI-compatible upstream speaks its own envelope and vocabulary:
+Claude Code 2.1.x sends effort as one of ``low | medium | high | xhigh | max``,
+carried in the top-level ``reasoning_effort`` field or in ``output_config.effort``
+(see ``resolve_client_effort``), but each OpenAI-compatible upstream speaks its
+own envelope and vocabulary:
 
 * NVIDIA NIM GLM-5.x: top-level ``reasoning_effort`` string ``low|high|max``.
 * gpt-oss / o-series / kimi-k3 / deepseek-r1: top-level ``reasoning_effort``
@@ -91,10 +93,14 @@ def resolve_client_effort(reasoning_effort: Any, output_config: Any) -> Optional
 def normalize_effort(claude_value: Optional[str], config_override: Optional[str] = None) -> str:
     """Resolve the canonical effort level for a request.
 
-    Precedence: the value Claude Code sent (from ``/effort``) > the
-    REASONING_EFFORT env default > the built-in default (``high``).
+    ``claude_value`` is the already-resolved client value (from
+    ``resolve_client_effort``: top-level ``reasoning_effort`` >
+    ``output_config.effort``). ``config_override`` is the env default the caller
+    picked (the per-tier ``*_MODEL_EFFORT`` if set, else ``REASONING_EFFORT``).
+    The full precedence is therefore: client value > per-tier env >
+    ``REASONING_EFFORT`` > the built-in default (``high``).
 
-    The env var is intentionally a *default*, not a hard override: in-session
+    The env vars are intentionally *defaults*, not hard overrides: in-session
     ``/effort`` always wins so the level can be changed on the fly without
     restarting the proxy.
 

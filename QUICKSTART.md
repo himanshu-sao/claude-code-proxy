@@ -45,8 +45,13 @@ Compatibility" section for details.
 | `claude-*opus*`         | `BIG_MODEL`      |
 | `claude-*sonnet*`       | `MIDDLE_MODEL`   |
 | `claude-*haiku*`        | `SMALL_MODEL`    |
+| `claude-proxy-auto` (`AUTO_MODEL_ALIAS`) | `BIG_MODEL` (placeholder: no routing yet) |
 
-Each tier accepts a comma-separated fallback list, and `/effort` levels are translated to your upstream's native reasoning parameters — see the README's "Model Mapping" and "Controlling reasoning effort" sections for full details and provider examples.
+Each tier accepts a comma-separated fallback list, and `/effort` levels (`low|medium|high|xhigh|max`, sent as `reasoning_effort` or `output_config.effort`) are translated to your upstream's native reasoning parameters — see the README's "Model Mapping" and "Controlling reasoning effort" sections for full details and provider examples.
+
+## Optional: auto model
+
+The proxy also lists a virtual `claude-proxy-auto` model (4th entry in `/v1/models`, present only when `AUTO_MODEL_ENABLED` is on). It is a placeholder that always resolves to the BIG tier; it does no routing yet (a planned follow-up). Related variables, all optional and all needing a restart: `AUTO_MODEL_ALIAS`, `AUTO_MODEL_ENABLED` and the opt-in request capture `AUTO_SIGNAL_LOG` (plus `AUTO_SIGNAL_LOG_MAX_BYTES` / `AUTO_SIGNAL_LOG_BACKUP_COUNT`). See the README sections "Selecting the auto model in Claude Code" and "Signal log (Phase 0 capture)". Before turning `AUTO_SIGNAL_LOG` on, read its open-proxy warning: with the default `HOST="0.0.0.0"` and no `ANTHROPIC_API_KEY`, any peer that can reach the proxy can append to the log, so bind `HOST` to `127.0.0.1` in `.env`.
 
 ## Verify your setup
 
@@ -54,10 +59,14 @@ Each tier accepts a comma-separated fallback list, and `/effort` levels are tran
 # Liveness probe (5-token upstream completion)
 curl http://localhost:8082/test-connection
 
-# Unit tests (no live server needed)
-uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py
+# Offline unit subset, no live server needed (214 tests)
+uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py tests/test_signal_log.py
 
-# Full suite (includes live-integration tests; requires the proxy running on :8082)
+# Broader offline run (239 tests)
+uv run pytest tests/ --ignore=tests/test_main.py
+
+# Full suite: needs the proxy running on :8082, because tests/test_main.py posts to it
+# (if that proxy has AUTO_SIGNAL_LOG on, the test adds lines to its real signal log)
 uv run pytest tests/
 ```
 
