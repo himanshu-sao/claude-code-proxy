@@ -320,9 +320,10 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 
         return {"input_tokens": estimated_tokens}
 
-    except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text can echo request content or upstream detail; keep it in the server log only.
+        logger.exception("Error counting tokens")
+        raise HTTPException(status_code=500, detail="Token counting failed")
 
 
 @router.get("/health")
@@ -394,13 +395,14 @@ async def test_connection():
         }
 
     except Exception as e:
-        logger.error(f"API connectivity test failed: {e}")
+        # Log the detail server-side only: upstream text can echo keys or request content.
+        logger.error("API connectivity test failed: %s", type(e).__name__)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "failed",
                 "error_type": "API Error",
-                "message": str(e),
+                "message": "Upstream connectivity check failed; see the proxy log for the error type",
                 "timestamp": datetime.now().isoformat(),
                 "suggestions": [
                     "Check your OPENAI_API_KEY is valid",
