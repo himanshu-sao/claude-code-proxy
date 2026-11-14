@@ -67,7 +67,7 @@ curl http://localhost:8082/test-connection
 # Offline unit subset, no live server needed (214 tests)
 uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py tests/test_signal_log.py
 
-# Broader offline run (239 tests)
+# Whole offline suite (592 tests)
 uv run pytest tests/ --ignore=tests/test_main.py
 
 # Full suite: needs the proxy running on :8082, because tests/test_main.py posts to it
