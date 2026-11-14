@@ -108,8 +108,8 @@ def safe_error_summary(exc: BaseException) -> str:
 
     ``str(exc)`` is avoided because OpenAI SDK error messages frequently embed
     the rejected request body or streamed content. Callers that need a
-    user-facing message should resolve one via :func:`classify_openai_error`
-    style helpers, not from this summary.
+    user-facing message should resolve one via :func:`src.core.errors.map_upstream_error`,
+    not from this summary.
     """
     status = getattr(exc, "status_code", None)
     if status is not None:
