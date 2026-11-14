@@ -320,9 +320,10 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
 
         return {"input_tokens": estimated_tokens}
 
-    except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text can echo request content or upstream detail; keep it in the server log only.
+        logger.exception("Error counting tokens")
+        raise HTTPException(status_code=500, detail="Token counting failed")
 
 
 @router.get("/health")
@@ -331,7 +332,9 @@ async def health_check():
     # Get current RPM stats
     now = time.time()
     rpm_info = []
-    for api_key, usage in config._provider_usage.items():
+    # Keys are identified by their 1-based position in OPENAI_API_KEY, never by any part of the
+    # key itself: /health is unauthenticated, and even a prefix narrows a key.
+    for key_index, (api_key, usage) in enumerate(config._provider_usage.items(), start=1):
         # Reset expired windows
         if now - usage["window_start"] >= 60:
             current_count = 0
@@ -345,7 +348,7 @@ async def health_check():
 
         rpm_info.append(
             {
-                "key_prefix": api_key[:8] + "..." if len(api_key) > 8 else api_key,
+                "key_index": key_index,
                 "requests_this_minute": current_count,
                 "rpm_limit": config._rpm_limit,
                 "percentage_used": (
@@ -394,13 +397,14 @@ async def test_connection():
         }
 
     except Exception as e:
-        logger.error(f"API connectivity test failed: {e}")
+        # Log the detail server-side only: upstream text can echo keys or request content.
+        logger.error("API connectivity test failed: %s", type(e).__name__)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "failed",
                 "error_type": "API Error",
-                "message": str(e),
+                "message": "Upstream connectivity check failed; see the proxy log for the error type",
                 "timestamp": datetime.now().isoformat(),
                 "suggestions": [
                     "Check your OPENAI_API_KEY is valid",
