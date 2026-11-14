@@ -239,6 +239,19 @@ class Config:
             "All API keys have reached their RPM limit or are under penalty. Wait before retrying."
         )
 
+    def seconds_until_key_available(self) -> int:
+        """Whole seconds until the soonest RPM window resets, clamped to 1..60.
+
+        Used for the ``Retry-After`` header on our own 429 (all keys exhausted).
+        """
+        now = time.time()
+        remaining = [
+            max(0.0, 60 - (now - usage["window_start"])) for usage in self._provider_usage.values()
+        ]
+        if not remaining:
+            return 60
+        return max(1, min(60, int(min(remaining)) + 1))
+
     async def get_next_client_async(self):
         """Create an OpenAIClient for the next provider (async, non-blocking).
         If all API keys have reached their RPM limit, returns None so the caller
