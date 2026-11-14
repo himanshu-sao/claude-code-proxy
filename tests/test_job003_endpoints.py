@@ -17,6 +17,7 @@ from src.api import compat, endpoints
 from src.core.client import OpenAIClient
 from src.core.config import Config
 from src.core.config import config as _config
+from src.core.errors import error_type_for_status
 from src.main import app
 
 client = TestClient(app)
@@ -67,7 +68,7 @@ def upstream(monkeypatch):
     """Stub both client accessors; return the list of upstream acquisitions (empty = no call)."""
     calls = []
 
-    async def _next_async():
+    async def _next_async(*, stream=False):
         calls.append("async")
         return _StubClient()
 
@@ -148,7 +149,7 @@ def test_top_level_max_is_forwarded_as_max_to_upstream(upstream, monkeypatch):
 
     monkeypatch.setattr(_config, "big_models", ["z-ai/glm-5.1"])
 
-    async def _capture_async():
+    async def _capture_async(*, stream=False):
         return _Capture()
 
     monkeypatch.setattr(_config, "get_next_client", lambda: _Capture())
@@ -384,7 +385,7 @@ def failing_upstream(monkeypatch):
 
         monkeypatch.setattr(oc.client.chat.completions, "create", _raise)
 
-    async def _next_async():
+    async def _next_async(*, stream=False):
         return oc
 
     monkeypatch.setattr(_config, "get_next_client", lambda: oc)
@@ -409,7 +410,10 @@ def test_non_stream_upstream_status_and_text_pass_through(
     install(_api_error(cls, status, message))
     res = client.post("/v1/messages", json=_body(model=TIER_MODEL))
     assert res.status_code == status
-    assert res.json()["detail"] == message
+    body = res.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == error_type_for_status(status)
+    assert body["error"]["message"] == message
     expected = [(_config.get_active_model("big"), "big")] if counts else []
     assert failures == expected
     assert rate_limits == ([] if status != 429 else [failing_upstream[3].api_key])
@@ -422,20 +426,11 @@ def test_stream_upstream_error_counts_as_model_failure_only_for_503_and_429(
     install, failures, _, _ = failing_upstream
     install(_api_error(cls, status, message))
     res = client.post("/v1/messages", json=_body(model=TIER_MODEL, stream=True))
-    assert res.status_code == 200  # see the strict xfail below for the visible-error gap
+    assert res.status_code == status
     expected = [(_config.get_active_model("big"), "big")] if counts else []
     assert failures == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG (documents current behaviour): an upstream error on the streaming path is yielded "
-        "by OpenAIClient as a bare 'data: {\"error\": ...}' line that "
-        "response_converter ignores (it has no choices), so the client gets HTTP 200 and an "
-        "empty successful message with no error text."
-    ),
-)
 @pytest.mark.parametrize("cls,status,message,counts", _PASS_THROUGH)
 def test_stream_upstream_error_is_visible_to_client(failing_upstream, cls, status, message, counts):
     install, _, _, _ = failing_upstream

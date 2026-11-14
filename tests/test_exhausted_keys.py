@@ -31,7 +31,7 @@ def _body(stream: bool):
 def exhausted(monkeypatch):
     """Simulate every key being over its RPM limit, and fail loudly if the sync getter is used."""
 
-    async def _none():
+    async def _none(*, stream=False):
         return None
 
     def _forbidden(*_a, **_k):
@@ -48,7 +48,10 @@ def test_exhausted_keys_return_429_with_retry_after(exhausted, stream):
     res = client.post("/v1/messages", json=_body(stream))
     assert res.status_code == 429
     assert res.headers["retry-after"] == "7"
-    assert res.json()["detail"].startswith("All API keys exhausted")
+    body = res.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "rate_limit_error"
+    assert body["error"]["message"].startswith("All API keys exhausted")
 
 
 def test_retry_after_is_integer_within_1_and_60():
