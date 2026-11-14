@@ -52,8 +52,8 @@ _console_handler.setLevel(getattr(logging, _LOG_LEVEL))
 _console_handler.setFormatter(logging.Formatter(_FORMAT, _DATE_FMT))
 _root_logger.addHandler(_console_handler)
 
-# File handler - overwrite mode (w = write, not append)
-_file_handler = logging.FileHandler(_log_file, mode="w", encoding="utf-8")
+# File handler - append mode, so importing this module never truncates history
+_file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
 _file_handler.setLevel(getattr(logging, _LOG_LEVEL))
 _file_handler.setFormatter(logging.Formatter(_FORMAT, _DATE_FMT))
 _root_logger.addHandler(_file_handler)

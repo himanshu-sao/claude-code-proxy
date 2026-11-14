@@ -65,10 +65,8 @@ def _emit_signal_safe(request: ClaudeMessagesRequest, http_request: Request) -> 
         logger.debug("signal log skipped: %s", type(exc).__name__)
 
 
-# Global client for compatibility; each request may obtain a fresh client via config.
-openai_client = config.get_next_client()
-
-# No global OpenAI client; each request obtains a client from config to enable round‑robin provider selection.
+# No global OpenAI client: each request obtains one from config (round-robin across keys).
+# Note: config.get_next_client() is the blocking variant; never call it from async handlers.
 
 
 async def validate_api_key(
@@ -144,10 +142,11 @@ async def create_message(
             try:
                 client = await config.get_next_client_async()
                 if client is None:
-                    # All API keys exhausted - return 429
+                    # All API keys exhausted - return 429 with a retry hint
                     raise HTTPException(
                         status_code=429,
                         detail="All API keys exhausted. Please wait before trying again.",
+                        headers={"Retry-After": str(config.seconds_until_key_available())},
                     )
                 openai_stream = client.create_chat_completion_stream(
                     openai_request, request_id, model_tier
@@ -169,6 +168,9 @@ async def create_message(
                         "Access-Control-Allow-Headers": "*",
                     },
                 )
+            except HTTPException:
+                # Our own deliberate HTTP errors (e.g. 429 for exhausted keys) must reach the client
+                raise
             except Exception as e:
                 # Log unexpected errors (API errors are now yielded as events in the stream)
                 logger.error(f"Unexpected streaming error: {e}")
@@ -177,7 +179,14 @@ async def create_message(
                 logger.error(traceback.format_exc())
         else:
             # Non-streaming response
-            client = config.get_next_client()
+            client = await config.get_next_client_async()
+            if client is None:
+                # All API keys exhausted - return 429 with a retry hint
+                raise HTTPException(
+                    status_code=429,
+                    detail="All API keys exhausted. Please wait before trying again.",
+                    headers={"Retry-After": str(config.seconds_until_key_available())},
+                )
             try:
                 openai_response = await client.create_chat_completion(
                     openai_request, request_id, model_tier
@@ -292,7 +301,9 @@ async def test_connection():
     """Test API connectivity to OpenAI"""
     try:
         # Simple test request to verify API connectivity
-        client = config.get_next_client()
+        client = await config.get_next_client_async()
+        if client is None:
+            raise RuntimeError("All API keys have reached their RPM limit or are under penalty.")
         test_response = await client.create_chat_completion(
             {
                 "model": config.small_model,
