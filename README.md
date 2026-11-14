@@ -406,7 +406,7 @@ The shell expands the glob (the script does not), so run it after the log exists
 # Offline unit subset, no server needed (214 tests)
 uv run pytest tests/test_effort_mapper.py tests/test_endpoints.py tests/test_context_manager.py tests/test_model_manager.py tests/test_signal_log.py
 
-# Full offline run (592 tests; also covers the error-contract, retry, config and desktop-compat tests)
+# Full offline run (600 tests; also covers the error-contract, retry, config and desktop-compat tests)
 uv run pytest tests/ --ignore=tests/test_main.py
 
 # Full suite: additionally needs a live proxy on :8082, because tests/test_main.py posts to it
@@ -416,7 +416,7 @@ uv run pytest tests/
 NVIDIA_API_KEY=nvapi-... uv run scripts/test_nim_effort.py [model]
 ```
 
-Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. The test counts above (214 / 592) are the current numbers and will change as tests are added. The offline suite passes on Python 3.9 and 3.14.
+Notes: `tests/test_main.py` posts to a **live** proxy on `localhost:8082`; if that proxy has `AUTO_SIGNAL_LOG` on, the test adds lines to its real signal log. The offline tests assume no `AUTO_*` keys in your environment. Inside a git worktree, run `python -m pytest ...` with the worktree as the current directory so tests import that worktree's `src` and not another checkout's. The test counts above (214 / 600) are the current numbers and will change as tests are added. The offline suite passes on Python 3.9 and 3.14.
 
 ## Development
 
