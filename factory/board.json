@@ -138,7 +138,7 @@
       "feature": "[003 T6] docs and .env.example",
       "branch": "factory/003-auto-model-groundwork-t6",
       "kind": "feature",
-      "stage": "review",
+      "stage": "merged",
       "round": 2,
       "parent": "003-auto-model-groundwork",
       "depends": [
@@ -153,8 +153,8 @@
         "code": "CHANGES",
         "api": "PASS"
       },
-      "decision": "pending",
-      "updatedAt": "2026-11-14T02:50:00"
+      "decision": "APPROVE",
+      "updatedAt": "2026-11-14T03:20:00"
     }
   ]
 }
