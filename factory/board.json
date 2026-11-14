@@ -138,8 +138,8 @@
       "feature": "[003 T6] docs and .env.example",
       "branch": "factory/003-auto-model-groundwork-t6",
       "kind": "feature",
-      "stage": "spec",
-      "round": 0,
+      "stage": "review",
+      "round": 2,
       "parent": "003-auto-model-groundwork",
       "depends": [
         "003-auto-model-groundwork-t1",
@@ -149,12 +149,12 @@
         "003-auto-model-groundwork-t5"
       ],
       "reviews": {
-        "security": "pending",
-        "code": "pending",
-        "api": "pending"
+        "security": "PASS",
+        "code": "CHANGES",
+        "api": "PASS"
       },
       "decision": "pending",
-      "updatedAt": "2026-11-13T13:20:00"
+      "updatedAt": "2026-11-14T02:50:00"
     }
   ]
 }
