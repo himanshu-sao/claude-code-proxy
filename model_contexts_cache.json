@@ -54,5 +54,9 @@
   "minimaxai/minimax-m3.1-flash": [
     262144,
     32768
+  ],
+  "nvidia/nemotron-3.5-bolt-e4b": [
+    65536,
+    16384
   ]
 }
