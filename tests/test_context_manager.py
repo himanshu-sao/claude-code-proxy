@@ -105,6 +105,18 @@ class TestCachedNimLimits:
         assert get_model_limits(_MISTRAL_LARGE) == (1_000, 100)
         assert get_model_limits(_MINIMAX_FLASH) == (262144, 32768)
 
+    def test_nemotron_bolt_not_on_safe_default(self):
+        # SMALL_MODEL fallback. Context (65,536) is from its build.nvidia.com page;
+        # the 16,384 output cap is a conservative choice (the page gives none).
+        limits = get_model_limits("nvidia/nemotron-3.5-bolt-e4b")
+        assert limits == (65536, 16384)
+        assert limits != _SAFE_DEFAULT
+
+    def test_nemotron_bolt_does_not_change_sibling_nemotron_limits(self):
+        assert get_model_limits("nvidia/nemotron-3.5-lightning-30b-a3b") == (1_048_576, 32_768)
+        assert get_model_limits("nvidia/nemotron-3-ultra-550b-a55b") == (1_048_576, 32_768)
+        assert get_model_limits("nvidia/nemotron-3.5-super-vl-120b-a12b") == (262144, 32768)
+
 
 class TestEstimateTokens:
     def test_plain_string_messages(self):
